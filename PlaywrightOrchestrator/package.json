@@ -1,0 +1,46 @@
+{
+  "name": "playwright-orchestrator",
+  "version": "1.0.0",
+  "description": "Multi-agent Playwright orchestration framework — 15 specialized agents coordinated by a master orchestrator",
+  "main": "dist/index.js",
+  "bin": {
+    "pworch": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "dev": "ts-node src/index.ts",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report",
+    "orchestrate": "ts-node src/index.ts orchestrate",
+    "plan": "ts-node src/index.ts plan",
+    "generate": "ts-node src/index.ts generate",
+    "execute": "ts-node src/index.ts execute",
+    "heal": "ts-node src/index.ts heal",
+    "report": "ts-node src/index.ts report",
+    "scaffold": "ts-node src/index.ts scaffold",
+    "chat": "ts-node src/index.ts chat",
+    "accessibility": "ts-node src/index.ts accessibility",
+    "security": "ts-node src/index.ts security",
+    "performance": "ts-node src/index.ts performance",
+    "api": "ts-node src/index.ts api",
+    "status": "ts-node src/index.ts status"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.9.0",
+    "@playwright/test": "^1.44.0",
+    "chalk": "^4.1.2",
+    "commander": "^12.0.0",
+    "dotenv": "^16.4.5",
+    "uuid": "^9.0.1",
+    "winston": "^3.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/uuid": "^9.0.8",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}

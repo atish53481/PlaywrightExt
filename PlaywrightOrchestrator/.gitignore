@@ -1,0 +1,14 @@
+node_modules/
+dist/
+logs/
+reports/html/
+reports/test-results/
+reports/videos/
+reports/traces/
+reports/*.json
+reports/*.html
+.auth/*.json
+tests/generated/
+framework/
+.env
+*.log

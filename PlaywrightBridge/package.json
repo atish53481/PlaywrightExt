@@ -1,0 +1,14 @@
+{
+  "name": "playwright-bridge",
+  "version": "1.0.0",
+  "description": "Local bridge: Playwright AI Studio extension -> real Playwright test runs",
+  "type": "module",
+  "scripts": {
+    "setup": "npm install && npx playwright install chromium",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.49.0",
+    "ws": "^8.18.0"
+  }
+}

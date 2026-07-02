@@ -1,0 +1,539 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Playwright AI Studio</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar">
+    <div class="logo">🎭</div>
+    <div class="nav-items">
+      <button class="nav-btn active" data-panel="planner">📋<span class="tooltip">Test Planner</span></button>
+      <button class="nav-btn" data-panel="generator">⚡<span class="tooltip">Test Generator</span></button>
+      <button class="nav-btn" data-panel="healer">🔧<span class="tooltip">Test Healer</span></button>
+      <button class="nav-btn" data-panel="recorder">🎬<span class="tooltip">Recorder</span></button>
+      <button class="nav-btn" data-panel="inspector">🔍<span class="tooltip">Inspector</span></button>
+      <div class="nav-divider"></div>
+      <button class="nav-btn" data-panel="chat">💬<span class="tooltip">AI Chat</span></button>
+      <button class="nav-btn" data-panel="framework">📦<span class="tooltip">Framework</span></button>
+      <button class="nav-btn" data-panel="export">📤<span class="tooltip">Export/Import</span></button>
+      <button class="nav-btn" data-panel="session">🌐<span class="tooltip">Browser Session</span></button>
+      <button class="nav-btn" data-panel="orchestrator">🤖<span class="tooltip">Orchestrator</span></button>
+    </div>
+    <div class="nav-bottom">
+      <button class="nav-btn" data-panel="settings">⚙️<span class="tooltip">Settings</span></button>
+    </div>
+  </nav>
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Playwright AI Studio</span>
+      <span class="topbar-badge" id="provider-badge">MOCK</span>
+      <span class="topbar-provider" id="provider-label">Mock Provider</span>
+    </div>
+    <div class="panels">
+
+      <!-- TEST PLANNER -->
+      <div class="panel active" id="panel-planner">
+        <div class="panel-header">
+          <span class="panel-icon">📋</span>
+          <div><h2>Test Planner Agent</h2><p>Requirements → complete test strategy, test cases, RTM</p></div>
+          <span class="badge">AI Agent</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-row">
+            <div class="form-group" style="max-width:160px">
+              <label>Input Type</label>
+              <select id="planner-input-type">
+                <option value="user story">User Story</option>
+                <option value="BRD">BRD</option>
+                <option value="PRD">PRD</option>
+                <option value="acceptance criteria">Acceptance Criteria</option>
+                <option value="Jira story">Jira Story</option>
+                <option value="feature description">Feature Description</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Generate</label>
+              <div class="check-group">
+                <label><input type="checkbox" checked id="p-strategy"> Strategy</label>
+                <label><input type="checkbox" checked id="p-cases"> Test Cases</label>
+                <label><input type="checkbox" checked id="p-rtm"> RTM</label>
+                <label><input type="checkbox" checked id="p-risk"> Risk Areas</label>
+                <label><input type="checkbox" id="p-data"> Test Data</label>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Requirement Input</label>
+            <textarea id="planner-input" rows="6" placeholder="Paste your User Story, BRD, PRD, Jira story, or feature description..."></textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="planner-run">🚀 Generate Test Plan</button>
+            <button class="btn btn-secondary" id="planner-export-md">⬇ MD</button>
+            <button class="btn btn-secondary" id="planner-export-csv">⬇ CSV</button>
+            <button class="btn btn-secondary btn-sm" id="planner-clear">Clear</button>
+          </div>
+          <div class="output-section">
+            <div class="output-header"><span>Test Plan Output</span>
+              <div class="output-header-btns"><button class="btn btn-icon" id="planner-copy">📋 Copy</button></div>
+            </div>
+            <div class="output-content" id="planner-output"><span class="output-placeholder">Test plan will appear here...</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TEST GENERATOR -->
+      <div class="panel" id="panel-generator">
+        <div class="panel-header">
+          <span class="panel-icon">⚡</span>
+          <div><h2>Test Generator Agent</h2><p>Convert test plans into executable Playwright code</p></div>
+          <span class="badge">AI Agent</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Language</label>
+              <select id="gen-language">
+                <option value="typescript">TypeScript</option>
+                <option value="javascript">JavaScript</option>
+                <option value="python">Python</option>
+                <option value="java">Java</option>
+                <option value="csharp">C#</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Framework</label>
+              <select id="gen-framework">
+                <option value="pom">Page Object Model</option>
+                <option value="component">Component Object</option>
+                <option value="fixtures">Fixtures</option>
+                <option value="bdd">BDD/Cucumber</option>
+                <option value="data-driven">Data Driven</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Generate</label>
+            <div class="check-group">
+              <label><input type="checkbox" checked id="gen-tests"> Tests</label>
+              <label><input type="checkbox" checked id="gen-pom"> Page Classes</label>
+              <label><input type="checkbox" id="gen-fixtures"> Fixtures</label>
+              <label><input type="checkbox" id="gen-utils"> Utils</label>
+              <label><input type="checkbox" id="gen-api"> API Tests</label>
+              <label><input type="checkbox" id="gen-visual"> Visual Tests</label>
+              <label><input type="checkbox" id="gen-a11y"> A11y Tests</label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Test Plan / Requirements</label>
+            <textarea id="gen-input" rows="6" placeholder="Paste test plan, user story, or feature description. Generator creates complete Playwright code..."></textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="gen-run">⚡ Generate Code</button>
+            <button class="btn btn-secondary" id="gen-run-live">▶ Run on Page</button>
+            <button class="btn btn-secondary" id="gen-run-bridge">🚀 Run via Playwright</button>
+            <button class="btn btn-secondary" id="gen-export">⬇ Download</button>
+            <button class="btn btn-secondary btn-sm" id="gen-clear">Clear</button>
+          </div>
+          <div class="output-section">
+            <div class="output-header"><span>Generated Code</span>
+              <div class="output-header-btns"><button class="btn btn-icon" id="gen-copy">📋 Copy</button></div>
+            </div>
+            <div class="output-content" id="gen-output"><span class="output-placeholder">Playwright code will appear here...</span></div>
+          </div>
+          <div class="output-section" id="gen-run-section" style="display:none">
+            <div class="output-header"><span>Live Run Results</span>
+              <div class="output-header-btns">
+                <button class="btn btn-icon" id="gen-heal" style="display:none">🩹 Heal Failures</button>
+                <span id="gen-run-summary" style="font-size:11px;color:var(--text2)"></span>
+              </div>
+            </div>
+            <div class="output-content" id="gen-run-results" style="max-height:220px;overflow-y:auto"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TEST HEALER -->
+      <div class="panel" id="panel-healer">
+        <div class="panel-header">
+          <span class="panel-icon">🔧</span>
+          <div><h2>Test Healer Agent</h2><p>Automatically repair broken Playwright tests with confidence scores</p></div>
+          <span class="badge">AI Agent</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label>Error Message</label>
+            <textarea id="healer-error" rows="2" placeholder="Paste the error from your test run (optional)..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>Broken Test Code</label>
+            <textarea id="healer-code" rows="8" placeholder="Paste your failing Playwright test code here..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>Context / DOM Change</label>
+            <textarea id="healer-context" rows="2" placeholder="Describe what changed (optional)..."></textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="healer-run">🔧 Heal Test</button>
+            <button class="btn btn-secondary" id="healer-export">⬇ Export Fix</button>
+            <button class="btn btn-secondary btn-sm" id="healer-clear">Clear</button>
+          </div>
+          <div class="output-section">
+            <div class="output-header"><span>Healing Report</span>
+              <div class="output-header-btns"><button class="btn btn-icon" id="healer-copy">📋 Copy</button></div>
+            </div>
+            <div class="output-content" id="healer-output"><span class="output-placeholder">Healing analysis will appear here...</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RECORDER -->
+      <div class="panel" id="panel-recorder">
+        <div class="panel-header">
+          <span class="panel-icon">🎬</span>
+          <div><h2>Recorder Agent</h2><p>Record browser interactions → live Playwright code generation</p></div>
+          <span class="badge">Live</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Language</label>
+              <select id="rec-language">
+                <option value="typescript">TypeScript</option>
+                <option value="javascript">JavaScript</option>
+                <option value="python">Python</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Test Name</label>
+              <input type="text" id="rec-test-name" value="Recorded Test">
+            </div>
+          </div>
+          <div class="recorder-status">
+            <div class="rec-dot" id="rec-dot"></div>
+            <span id="rec-status-text">Ready to record</span>
+            <span id="rec-count" style="margin-left:auto;color:var(--text3);font-size:11px">0 actions</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="rec-start">⏺ Start</button>
+            <button class="btn btn-secondary" id="rec-pause" disabled>⏸ Pause</button>
+            <button class="btn btn-danger" id="rec-stop" disabled>⏹ Stop</button>
+            <button class="btn btn-secondary btn-sm" id="rec-clear">Clear</button>
+          </div>
+          <div class="form-group">
+            <label>Recorded Actions</label>
+            <div class="action-list" id="action-list"><span style="color:var(--text3);font-size:11px;padding:4px">No actions yet</span></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="rec-ai-enhance">✨ AI Enhance</button>
+            <button class="btn btn-secondary" id="rec-export">⬇ Download</button>
+          </div>
+          <div class="output-section">
+            <div class="output-header"><span>Generated Code</span>
+              <div class="output-header-btns"><button class="btn btn-icon" id="rec-copy">📋 Copy</button></div>
+            </div>
+            <div class="output-content" id="rec-output"><span class="output-placeholder">Recording will generate code here in real time...</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- INSPECTOR -->
+      <div class="panel" id="panel-inspector">
+        <div class="panel-header">
+          <span class="panel-icon">🔍</span>
+          <div><h2>Inspector Agent</h2><p>Click any element → ranked Playwright locators with scores</p></div>
+          <span class="badge">Live</span>
+        </div>
+        <div class="panel-body">
+          <div class="btn-row">
+            <button class="btn btn-primary" id="inspect-start">🔍 Start Inspecting</button>
+            <button class="btn btn-danger" id="inspect-stop" disabled>⏹ Stop</button>
+          </div>
+          <div id="inspect-hint" style="font-size:11px;color:var(--text2);padding:6px 0">Start inspecting then click any element on the active page to see ranked locators.</div>
+          <div id="inspect-results" style="display:none">
+            <div class="form-group">
+              <label>Best Locator</label>
+              <div class="locator-card locator-best" id="inspect-best">
+                <div class="locator-strategy" id="best-strategy">—</div>
+                <div class="locator-code" id="best-locator">Click an element to inspect</div>
+                <div class="score-bar"><div class="score-fill" id="best-score-bar" style="width:0%"></div></div>
+                <div style="font-size:10px;color:var(--text2)" id="best-score-label">Score: —</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>All Options (click to copy)</label>
+              <div id="locator-list" style="display:flex;flex-direction:column;gap:4px"></div>
+            </div>
+            <div class="form-group">
+              <label>Element Info</label>
+              <div class="output-content" id="element-info" style="min-height:60px;font-size:11px"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI CHAT -->
+      <div class="panel" id="panel-chat">
+        <div class="panel-header">
+          <span class="panel-icon">💬</span>
+          <div><h2>AI Chat Agent</h2><p>Playwright, BDD, API Testing, CI/CD, Accessibility — ask anything</p></div>
+          <span class="badge">AI Agent</span>
+        </div>
+        <div class="chat-history" id="chat-history">
+          <div class="msg msg-ai"><div class="msg-bubble">👋 Hi! I'm PlaywrightBot. Ask me anything about Playwright testing, automation frameworks, CI/CD, or QA best practices!</div></div>
+        </div>
+        <div class="chat-input-row">
+          <textarea id="chat-input" rows="2" placeholder="Ask about Playwright, BDD, CI/CD, API testing... (Ctrl+Enter to send)"></textarea>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <button class="btn btn-primary" id="chat-send" style="height:36px">Send</button>
+            <button class="btn btn-secondary btn-sm" id="chat-clear">Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- FRAMEWORK -->
+      <div class="panel" id="panel-framework">
+        <div class="panel-header">
+          <span class="panel-icon">📦</span>
+          <div><h2>Framework Agent</h2><p>Generate, analyze and improve complete Playwright automation frameworks</p></div>
+          <span class="badge">AI Agent</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Action</label>
+              <select id="fw-action">
+                <option value="generate">Generate New Framework</option>
+                <option value="analyze">Analyze Existing Code</option>
+                <option value="improve">Improve Existing Code</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Language</label>
+              <select id="fw-language">
+                <option value="typescript">TypeScript</option>
+                <option value="javascript">JavaScript</option>
+                <option value="python">Python</option>
+                <option value="java">Java</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Include</label>
+            <div class="check-group">
+              <label><input type="checkbox" checked id="fw-pom"> POM</label>
+              <label><input type="checkbox" id="fw-bdd"> BDD</label>
+              <label><input type="checkbox" id="fw-api"> API Layer</label>
+              <label><input type="checkbox" id="fw-visual"> Visual Testing</label>
+              <label><input type="checkbox" id="fw-a11y"> Accessibility</label>
+              <label><input type="checkbox" id="fw-ci"> CI/CD</label>
+              <label><input type="checkbox" id="fw-docker"> Docker</label>
+              <label><input type="checkbox" id="fw-allure"> Allure Reports</label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Paste Code (for Analyze/Improve)</label>
+            <textarea id="fw-code" rows="5" placeholder="Paste your existing framework code here..."></textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="fw-run">🚀 Run Agent</button>
+            <button class="btn btn-secondary" id="fw-export">⬇ Download</button>
+            <button class="btn btn-secondary btn-sm" id="fw-clear">Clear</button>
+          </div>
+          <div class="output-section">
+            <div class="output-header"><span>Framework Output</span>
+              <div class="output-header-btns"><button class="btn btn-icon" id="fw-copy">📋 Copy</button></div>
+            </div>
+            <div class="output-content" id="fw-output"><span class="output-placeholder">Framework analysis or generated code will appear here...</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPORT/IMPORT -->
+      <div class="panel" id="panel-export">
+        <div class="panel-header">
+          <span class="panel-icon">📤</span>
+          <div><h2>Export / Import Agent</h2><p>Export as Markdown, JSON, CSV, TypeScript — Import existing frameworks</p></div>
+          <span class="badge">Agent</span>
+        </div>
+        <div class="panel-body">
+          <div class="settings-section">
+            <h3>Export</h3>
+            <div class="form-group" style="margin-top:8px">
+              <label>Content to Export</label>
+              <textarea id="export-content" rows="5" placeholder="Paste content to export, or leave blank to use last generated output..."></textarea>
+            </div>
+            <div class="form-row" style="margin-top:8px">
+              <div class="form-group">
+                <label>Format</label>
+                <select id="export-format">
+                  <option value="markdown">Markdown (.md)</option>
+                  <option value="typescript">TypeScript (.ts)</option>
+                  <option value="javascript">JavaScript (.js)</option>
+                  <option value="python">Python (.py)</option>
+                  <option value="json">JSON (.json)</option>
+                  <option value="csv">CSV (.csv)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Filename</label>
+                <input type="text" id="export-filename" value="playwright-export">
+              </div>
+            </div>
+            <div class="btn-row" style="margin-top:8px">
+              <button class="btn btn-primary" id="export-download">⬇ Download</button>
+              <button class="btn btn-secondary" id="export-clipboard">📋 Copy to Clipboard</button>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3>Recent Exports</h3>
+            <div id="export-history" style="font-size:11px;color:var(--text3)">No recent exports</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BROWSER SESSION -->
+      <div class="panel" id="panel-session">
+        <div class="panel-header">
+          <span class="panel-icon">🌐</span>
+          <div><h2>Browser Session Agent</h2><p>Capture full browser sessions → generate complete E2E Playwright tests</p></div>
+          <span class="badge">Live</span>
+        </div>
+        <div class="panel-body">
+          <div class="session-stats">
+            <div class="stat-card"><div class="stat-value" id="sess-actions">0</div><div class="stat-label">Actions</div></div>
+            <div class="stat-card"><div class="stat-value" id="sess-requests">0</div><div class="stat-label">API Calls</div></div>
+            <div class="stat-card"><div class="stat-value" id="sess-duration">0s</div><div class="stat-label">Duration</div></div>
+          </div>
+          <div class="form-group">
+            <label>Capture Options</label>
+            <div class="check-group">
+              <label><input type="checkbox" checked id="sess-actions-opt"> Actions</label>
+              <label><input type="checkbox" checked id="sess-network"> Network/API</label>
+              <label><input type="checkbox" checked id="sess-console"> Console Logs</label>
+              <label><input type="checkbox" id="sess-screenshots"> Screenshots</label>
+              <label><input type="checkbox" id="sess-cookies"> Cookies</label>
+              <label><input type="checkbox" id="sess-storage"> Local Storage</label>
+              <label><input type="checkbox" id="sess-har"> HAR File</label>
+            </div>
+          </div>
+          <div class="recorder-status">
+            <div class="rec-dot" id="sess-dot"></div>
+            <span id="sess-status-text">Ready</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="sess-start">▶ Start Capture</button>
+            <button class="btn btn-danger" id="sess-stop" disabled>⏹ Stop</button>
+            <button class="btn btn-secondary" id="sess-generate">✨ Generate Test</button>
+          </div>
+          <div class="output-section">
+            <div class="output-header"><span>Generated Test</span>
+              <div class="output-header-btns"><button class="btn btn-icon" id="sess-copy">📋 Copy</button></div>
+            </div>
+            <div class="output-content" id="sess-output"><span class="output-placeholder">Start a browser session to generate Playwright tests...</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ORCHESTRATOR -->
+      <div class="panel" id="panel-orchestrator">
+        <div class="panel-header">
+          <span class="panel-icon">🤖</span>
+          <div><h2>AI Orchestrator</h2><p>Chain agents — Requirements → Plan → Code in one pipeline</p></div>
+          <span class="badge">Orchestrator</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label>Pipeline Steps</label>
+            <div class="pipeline">
+              <div class="pipeline-step"><span class="step-icon">📋</span><span class="step-name">Test Planner</span><span class="step-status" id="step-planner-status">Waiting</span></div>
+              <div class="pipeline-arrow">↓</div>
+              <div class="pipeline-step"><span class="step-icon">⚡</span><span class="step-name">Test Generator</span><span class="step-status" id="step-generator-status">Waiting</span></div>
+              <div class="pipeline-arrow">↓</div>
+              <div class="pipeline-step"><span class="step-icon">📤</span><span class="step-name">Export</span><span class="step-status" id="step-export-status">Waiting</span></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Requirements Input</label>
+            <textarea id="orch-input" rows="4" placeholder="Describe your feature or paste requirements. The orchestrator runs all agents automatically..."></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Language</label>
+              <select id="orch-language">
+                <option value="typescript">TypeScript</option>
+                <option value="javascript">JavaScript</option>
+                <option value="python">Python</option>
+                <option value="java">Java</option>
+              </select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="orch-run">🤖 Run Full Pipeline</button>
+            <button class="btn btn-secondary btn-sm" id="orch-clear">Clear</button>
+          </div>
+          <div id="orch-log" style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:11px;font-family:var(--mono);color:var(--text2);min-height:60px;max-height:120px;overflow-y:auto">
+            <span style="color:var(--text3)">Pipeline log...</span>
+          </div>
+          <div class="output-section">
+            <div class="output-header"><span>Pipeline Results</span>
+              <div class="output-header-btns"><button class="btn btn-icon" id="orch-copy">📋 Copy All</button></div>
+            </div>
+            <div class="output-content" id="orch-output"><span class="output-placeholder">Run the pipeline to see combined results...</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="panel" id="panel-settings">
+        <div class="panel-header">
+          <span class="panel-icon">⚙️</span>
+          <div><h2>Settings</h2><p>Configure AI provider and API keys</p></div>
+        </div>
+        <div class="panel-body">
+          <div class="settings-section">
+            <h3>AI Provider</h3>
+            <div class="provider-grid" style="margin-top:8px">
+              <div class="provider-card selected" data-provider="mock"><span class="provider-icon">🎭</span><div class="provider-info"><div class="provider-name">Mock Provider (Demo)</div><div class="provider-desc">No API key needed — realistic responses</div></div></div>
+              <div class="provider-card" data-provider="claude"><span class="provider-icon">🤖</span><div class="provider-info"><div class="provider-name">Claude (Anthropic)</div><div class="provider-desc">claude-sonnet-4-6 — Best for QA code generation</div></div></div>
+              <div class="provider-card" data-provider="openai"><span class="provider-icon">💡</span><div class="provider-info"><div class="provider-name">OpenAI</div><div class="provider-desc">GPT-4o — Excellent code generation</div></div></div>
+              <div class="provider-card" data-provider="gemini"><span class="provider-icon">✨</span><div class="provider-info"><div class="provider-name">Google Gemini</div><div class="provider-desc">gemini-1.5-pro — Fast responses</div></div></div>
+              <div class="provider-card" data-provider="bridge"><span class="provider-icon">🌉</span><div class="provider-info"><div class="provider-name">Bridge (Claude Code)</div><div class="provider-desc">Local Claude Code CLI via Playwright Bridge — no API key</div></div></div>
+            </div>
+          </div>
+          <div class="settings-section" id="api-key-section" style="display:none">
+            <h3>API Configuration</h3>
+            <div class="form-group" style="margin-top:8px">
+              <label>API Key</label>
+              <input type="password" id="settings-apikey" placeholder="Paste your API key...">
+            </div>
+            <div class="form-group" style="margin-top:8px">
+              <label>Model Override (optional)</label>
+              <input type="text" id="settings-model" placeholder="e.g. claude-sonnet-4-6 / gpt-4o">
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="settings-save">💾 Save Settings</button>
+            <button class="btn btn-secondary" id="settings-test">🧪 Test Connection</button>
+          </div>
+          <div id="settings-status" style="font-size:12px;color:var(--text2);padding:4px 0"></div>
+          <div class="settings-section">
+            <h3>About Playwright AI Studio v1.0.0</h3>
+            <div style="font-size:11px;color:var(--text2);line-height:1.8">
+              <div>🎭 The GitHub Copilot for QA Engineers</div>
+              <div>10 AI Agents: Planner · Generator · Healer · Recorder · Inspector · Chat · Framework · Export · Session · Orchestrator</div>
+              <div style="margin-top:6px">Supports Claude, OpenAI, Gemini + Mock Provider</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /panels -->
+  </main>
+</div>
+<script type="module" src="sidepanel.js"></script>
+</body>
+</html>
