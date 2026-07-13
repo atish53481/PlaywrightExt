@@ -8,7 +8,7 @@ Local companion for the **Playwright AI Studio** Chrome extension. Gives the ext
 ## Setup (once)
 
 ```bash
-cd Atish/PlaywrightBridge
+cd PlaywrightExt/PlaywrightBridge
 npm run setup        # installs deps + Chromium
 ```
 
@@ -22,7 +22,7 @@ Keep this terminal open while using the extension.
 
 ## Use from the extension
 
-- **Run tests:** Generator panel → **🚀 Run via Playwright** — code is written to `tests/bridge.spec.ts` and executed headed; output streams back into the side panel.
+- **Run tests:** Generator or Recorder panel → **🚀 Run via Playwright** — code is written to `tests/bridge.spec.ts` and executed headed; output streams back into the side panel.
 - **LLM:** Settings → select **Bridge (Claude Code)** provider → Save. All agents (planner/generator/healer/chat) now use your local Claude Code CLI.
 
 ## Protocol

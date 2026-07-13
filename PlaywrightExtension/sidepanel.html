@@ -45,7 +45,7 @@
         <div class="panel-body">
           <div class="form-row">
             <div class="form-group" style="max-width:160px">
-              <label>Input Type</label>
+              <label for="planner-input-type">Input Type</label>
               <select id="planner-input-type">
                 <option value="user story">User Story</option>
                 <option value="BRD">BRD</option>
@@ -56,7 +56,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Generate</label>
+              <span class="field-label">Generate</span>
               <div class="check-group">
                 <label><input type="checkbox" checked id="p-strategy"> Strategy</label>
                 <label><input type="checkbox" checked id="p-cases"> Test Cases</label>
@@ -67,7 +67,7 @@
             </div>
           </div>
           <div class="form-group">
-            <label>Requirement Input</label>
+            <label for="planner-input">Requirement Input</label>
             <textarea id="planner-input" rows="6" placeholder="Paste your User Story, BRD, PRD, Jira story, or feature description..."></textarea>
           </div>
           <div class="btn-row">
@@ -95,7 +95,7 @@
         <div class="panel-body">
           <div class="form-row">
             <div class="form-group">
-              <label>Language</label>
+              <label for="gen-language">Language</label>
               <select id="gen-language">
                 <option value="typescript">TypeScript</option>
                 <option value="javascript">JavaScript</option>
@@ -105,7 +105,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Framework</label>
+              <label for="gen-framework">Framework</label>
               <select id="gen-framework">
                 <option value="pom">Page Object Model</option>
                 <option value="component">Component Object</option>
@@ -116,7 +116,7 @@
             </div>
           </div>
           <div class="form-group">
-            <label>Generate</label>
+            <span class="field-label">Generate</span>
             <div class="check-group">
               <label><input type="checkbox" checked id="gen-tests"> Tests</label>
               <label><input type="checkbox" checked id="gen-pom"> Page Classes</label>
@@ -128,7 +128,7 @@
             </div>
           </div>
           <div class="form-group">
-            <label>Test Plan / Requirements</label>
+            <label for="gen-input">Test Plan / Requirements</label>
             <textarea id="gen-input" rows="6" placeholder="Paste test plan, user story, or feature description. Generator creates complete Playwright code..."></textarea>
           </div>
           <div class="btn-row">
@@ -165,15 +165,15 @@
         </div>
         <div class="panel-body">
           <div class="form-group">
-            <label>Error Message</label>
+            <label for="healer-error">Error Message</label>
             <textarea id="healer-error" rows="2" placeholder="Paste the error from your test run (optional)..."></textarea>
           </div>
           <div class="form-group">
-            <label>Broken Test Code</label>
+            <label for="healer-code">Broken Test Code</label>
             <textarea id="healer-code" rows="8" placeholder="Paste your failing Playwright test code here..."></textarea>
           </div>
           <div class="form-group">
-            <label>Context / DOM Change</label>
+            <label for="healer-context">Context / DOM Change</label>
             <textarea id="healer-context" rows="2" placeholder="Describe what changed (optional)..."></textarea>
           </div>
           <div class="btn-row">
@@ -200,7 +200,7 @@
         <div class="panel-body">
           <div class="form-row">
             <div class="form-group">
-              <label>Language</label>
+              <label for="rec-language">Language</label>
               <select id="rec-language">
                 <option value="typescript">TypeScript</option>
                 <option value="javascript">JavaScript</option>
@@ -208,7 +208,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Test Name</label>
+              <label for="rec-test-name">Test Name</label>
               <input type="text" id="rec-test-name" value="Recorded Test">
             </div>
           </div>
@@ -224,18 +224,32 @@
             <button class="btn btn-secondary btn-sm" id="rec-clear">Clear</button>
           </div>
           <div class="form-group">
-            <label>Recorded Actions</label>
+            <span class="field-label">Recorded Actions</span>
             <div class="action-list" id="action-list"><span style="color:var(--text3);font-size:11px;padding:4px">No actions yet</span></div>
           </div>
           <div class="btn-row">
             <button class="btn btn-secondary" id="rec-ai-enhance">✨ AI Enhance</button>
+            <button class="btn btn-secondary" id="rec-run-live">▶ Run on Page</button>
+            <button class="btn btn-secondary" id="rec-run-bridge">🚀 Run via Playwright</button>
             <button class="btn btn-secondary" id="rec-export">⬇ Download</button>
           </div>
           <div class="output-section">
             <div class="output-header"><span>Generated Code</span>
-              <div class="output-header-btns"><button class="btn btn-icon" id="rec-copy">📋 Copy</button></div>
+              <div class="output-header-btns">
+                <button class="btn btn-icon" id="rec-edit">✏️ Edit</button>
+                <button class="btn btn-icon" id="rec-copy">📋 Copy</button>
+              </div>
             </div>
             <div class="output-content" id="rec-output"><span class="output-placeholder">Recording will generate code here in real time...</span></div>
+          </div>
+          <div class="output-section" id="rec-run-section" style="display:none">
+            <div class="output-header"><span>Run Results</span>
+              <div class="output-header-btns">
+                <button class="btn btn-icon" id="rec-heal" style="display:none">🩹 Heal Failures</button>
+                <span id="rec-run-summary" style="font-size:11px;color:var(--text2)"></span>
+              </div>
+            </div>
+            <div class="output-content" id="rec-run-results" style="max-height:220px;overflow-y:auto"></div>
           </div>
         </div>
       </div>
@@ -255,7 +269,7 @@
           <div id="inspect-hint" style="font-size:11px;color:var(--text2);padding:6px 0">Start inspecting then click any element on the active page to see ranked locators.</div>
           <div id="inspect-results" style="display:none">
             <div class="form-group">
-              <label>Best Locator</label>
+              <span class="field-label">Best Locator</span>
               <div class="locator-card locator-best" id="inspect-best">
                 <div class="locator-strategy" id="best-strategy">—</div>
                 <div class="locator-code" id="best-locator">Click an element to inspect</div>
@@ -264,11 +278,11 @@
               </div>
             </div>
             <div class="form-group">
-              <label>All Options (click to copy)</label>
+              <span class="field-label">All Options (click to copy)</span>
               <div id="locator-list" style="display:flex;flex-direction:column;gap:4px"></div>
             </div>
             <div class="form-group">
-              <label>Element Info</label>
+              <span class="field-label">Element Info</span>
               <div class="output-content" id="element-info" style="min-height:60px;font-size:11px"></div>
             </div>
           </div>
@@ -286,7 +300,7 @@
           <div class="msg msg-ai"><div class="msg-bubble">👋 Hi! I'm PlaywrightBot. Ask me anything about Playwright testing, automation frameworks, CI/CD, or QA best practices!</div></div>
         </div>
         <div class="chat-input-row">
-          <textarea id="chat-input" rows="2" placeholder="Ask about Playwright, BDD, CI/CD, API testing... (Ctrl+Enter to send)"></textarea>
+          <textarea id="chat-input" rows="2" aria-label="Chat message" placeholder="Ask about Playwright, BDD, CI/CD, API testing... (Ctrl+Enter to send)"></textarea>
           <div style="display:flex;flex-direction:column;gap:4px">
             <button class="btn btn-primary" id="chat-send" style="height:36px">Send</button>
             <button class="btn btn-secondary btn-sm" id="chat-clear">Clear</button>
@@ -304,7 +318,7 @@
         <div class="panel-body">
           <div class="form-row">
             <div class="form-group">
-              <label>Action</label>
+              <label for="fw-action">Action</label>
               <select id="fw-action">
                 <option value="generate">Generate New Framework</option>
                 <option value="analyze">Analyze Existing Code</option>
@@ -312,7 +326,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Language</label>
+              <label for="fw-language">Language</label>
               <select id="fw-language">
                 <option value="typescript">TypeScript</option>
                 <option value="javascript">JavaScript</option>
@@ -322,7 +336,7 @@
             </div>
           </div>
           <div class="form-group">
-            <label>Include</label>
+            <span class="field-label">Include</span>
             <div class="check-group">
               <label><input type="checkbox" checked id="fw-pom"> POM</label>
               <label><input type="checkbox" id="fw-bdd"> BDD</label>
@@ -335,7 +349,7 @@
             </div>
           </div>
           <div class="form-group">
-            <label>Paste Code (for Analyze/Improve)</label>
+            <label for="fw-code">Paste Code (for Analyze/Improve)</label>
             <textarea id="fw-code" rows="5" placeholder="Paste your existing framework code here..."></textarea>
           </div>
           <div class="btn-row">
@@ -363,12 +377,12 @@
           <div class="settings-section">
             <h3>Export</h3>
             <div class="form-group" style="margin-top:8px">
-              <label>Content to Export</label>
+              <label for="export-content">Content to Export</label>
               <textarea id="export-content" rows="5" placeholder="Paste content to export, or leave blank to use last generated output..."></textarea>
             </div>
             <div class="form-row" style="margin-top:8px">
               <div class="form-group">
-                <label>Format</label>
+                <label for="export-format">Format</label>
                 <select id="export-format">
                   <option value="markdown">Markdown (.md)</option>
                   <option value="typescript">TypeScript (.ts)</option>
@@ -379,7 +393,7 @@
                 </select>
               </div>
               <div class="form-group">
-                <label>Filename</label>
+                <label for="export-filename">Filename</label>
                 <input type="text" id="export-filename" value="playwright-export">
               </div>
             </div>
@@ -409,7 +423,7 @@
             <div class="stat-card"><div class="stat-value" id="sess-duration">0s</div><div class="stat-label">Duration</div></div>
           </div>
           <div class="form-group">
-            <label>Capture Options</label>
+            <span class="field-label">Capture Options</span>
             <div class="check-group">
               <label><input type="checkbox" checked id="sess-actions-opt"> Actions</label>
               <label><input type="checkbox" checked id="sess-network"> Network/API</label>
@@ -447,7 +461,7 @@
         </div>
         <div class="panel-body">
           <div class="form-group">
-            <label>Pipeline Steps</label>
+            <span class="field-label">Pipeline Steps</span>
             <div class="pipeline">
               <div class="pipeline-step"><span class="step-icon">📋</span><span class="step-name">Test Planner</span><span class="step-status" id="step-planner-status">Waiting</span></div>
               <div class="pipeline-arrow">↓</div>
@@ -457,12 +471,12 @@
             </div>
           </div>
           <div class="form-group">
-            <label>Requirements Input</label>
+            <label for="orch-input">Requirements Input</label>
             <textarea id="orch-input" rows="4" placeholder="Describe your feature or paste requirements. The orchestrator runs all agents automatically..."></textarea>
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>Language</label>
+              <label for="orch-language">Language</label>
               <select id="orch-language">
                 <option value="typescript">TypeScript</option>
                 <option value="javascript">JavaScript</option>
@@ -507,11 +521,11 @@
           <div class="settings-section" id="api-key-section" style="display:none">
             <h3>API Configuration</h3>
             <div class="form-group" style="margin-top:8px">
-              <label>API Key</label>
-              <input type="password" id="settings-apikey" placeholder="Paste your API key...">
+              <label for="settings-apikey">API Key</label>
+              <input type="password" id="settings-apikey" autocomplete="off" placeholder="Paste your API key...">
             </div>
             <div class="form-group" style="margin-top:8px">
-              <label>Model Override (optional)</label>
+              <label for="settings-model">Model Override (optional)</label>
               <input type="text" id="settings-model" placeholder="e.g. claude-sonnet-4-6 / gpt-4o">
             </div>
           </div>

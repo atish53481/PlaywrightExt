@@ -23,11 +23,25 @@
     return fn ? fn(action) : `// Unknown action: ${action.type}`;
   },
 
+  // Recording fires one 'fill' per keystroke — keep only the final value per field
+  normalizeActions(actions) {
+    const normalized = [];
+    for (const a of actions) {
+      const prev = normalized[normalized.length - 1];
+      if (a.type === 'fill' && prev?.type === 'fill' && prev.selector === a.selector) {
+        normalized[normalized.length - 1] = a;
+      } else {
+        normalized.push(a);
+      }
+    }
+    return normalized;
+  },
+
   actionsToTest(actions, testName = 'Recorded test', language = 'typescript') {
     const header = language === 'typescript'
       ? `import { test, expect } from '@playwright/test';\n\ntest('${testName}', async ({ page }) => {`
       : `const { test, expect } = require('@playwright/test');\n\ntest('${testName}', async ({ page }) => {`;
-    const body = actions.map(a => `  ${this.actionToCode(a, language)}`).join('\n');
+    const body = this.normalizeActions(actions).map(a => `  ${this.actionToCode(a, language)}`).join('\n');
     return `${header}\n${body}\n});`;
   },
 

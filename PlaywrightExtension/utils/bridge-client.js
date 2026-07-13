@@ -1,4 +1,4 @@
-// WebSocket client for the local Playwright Bridge (Atish/PlaywrightBridge).
+// WebSocket client for the local Playwright Bridge (PlaywrightExt/PlaywrightBridge).
 // The bridge runs real Playwright tests (headed) and proxies LLM calls to the
 // locally installed Claude Code CLI.
 
@@ -11,12 +11,12 @@ export const BridgeClient = {
       const ws = new WebSocket(BRIDGE_URL);
       const t = setTimeout(() => {
         try { ws.close(); } catch {}
-        reject(new Error('Bridge not running — start it: cd Atish/PlaywrightBridge && npm start'));
+        reject(new Error('Bridge not running — start it: cd PlaywrightExt/PlaywrightBridge && npm start'));
       }, timeoutMs);
       ws.onopen = () => { clearTimeout(t); resolve(ws); };
       ws.onerror = () => {
         clearTimeout(t);
-        reject(new Error('Bridge not running — start it: cd Atish/PlaywrightBridge && npm start'));
+        reject(new Error('Bridge not running — start it: cd PlaywrightExt/PlaywrightBridge && npm start'));
       };
     });
   },

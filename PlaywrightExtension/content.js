@@ -51,11 +51,11 @@
   function getBestLocatorText(el) {
     if (el.getAttribute('data-testid')) return `[data-testid="${el.getAttribute('data-testid')}"]`;
     if (el.getAttribute('aria-label')) return `[aria-label="${el.getAttribute('aria-label')}"]`;
-    if (el.getAttribute('placeholder')) return `placeholder: "${el.getAttribute('placeholder')}"`;
+    if (el.getAttribute('placeholder')) return `[placeholder="${el.getAttribute('placeholder')}"]`;
     if (el.id) return `#${el.id}`;
     if (el.getAttribute('name')) return `[name="${el.getAttribute('name')}"]`;
     const text = el.textContent?.trim().slice(0, 40);
-    if (text) return `text: "${text}"`;
+    if (text) return `text="${text}"`;
     return el.tagName.toLowerCase();
   }
 
@@ -340,6 +340,8 @@
     switch (msg.type) {
       case 'START_RECORDING':
         isRecording = true; isPaused = false; recordedActions = [];
+        // Capture the starting URL — the generated test needs page.goto() as its first step
+        recordAction('navigate', { url: location.href });
         document.addEventListener('click', onClick, true);
         document.addEventListener('input', onInput, true);
         document.addEventListener('keydown', onKeyDown, true);

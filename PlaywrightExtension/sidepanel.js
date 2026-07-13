@@ -235,32 +235,12 @@ function setupGenerator() {
   bridgeBtn?.addEventListener('click', async () => {
     const code = document.getElementById('gen-output')?.textContent || '';
     if (!code || code.includes('will appear here')) { showToast('Generate code first'); return; }
-
-    const section = document.getElementById('gen-run-section');
-    const results = document.getElementById('gen-run-results');
-    const summaryEl = document.getElementById('gen-run-summary');
-    section.style.display = 'block';
-    results.innerHTML = '<pre id="bridge-log" style="margin:0;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>';
-    const log = document.getElementById('bridge-log');
-    summaryEl.textContent = '🌉 connecting to bridge...';
-    bridgeBtn.disabled = true;
-
-    try {
-      const res = await BridgeClient.runCode(code, (msg) => {
-        if (msg.type === 'status' || msg.type === 'output') {
-          log.textContent += msg.message || msg.line || '';
-          results.scrollTop = results.scrollHeight;
-          summaryEl.textContent = '🏃 Playwright running (headed)...';
-        }
-      });
-      summaryEl.textContent = res.passed ? '✅ Playwright run PASSED' : `❌ Playwright run FAILED (exit ${res.exitCode})`;
-      showToast(res.passed ? 'Real Playwright run passed!' : 'Run failed — see output');
-    } catch (e) {
-      summaryEl.textContent = '🌉 bridge unavailable';
-      log.textContent = `${e.message}\n\nSetup (once):\n  cd Atish/PlaywrightBridge\n  npm run setup\n\nThen keep running:\n  npm start`;
-    } finally {
-      bridgeBtn.disabled = false;
-    }
+    await runCodeViaBridge(code, {
+      section: document.getElementById('gen-run-section'),
+      results: document.getElementById('gen-run-results'),
+      summary: document.getElementById('gen-run-summary'),
+      btn: bridgeBtn
+    });
   });
 
   // ---- Run generated code live on the active page ----
@@ -268,64 +248,96 @@ function setupGenerator() {
   liveBtn?.addEventListener('click', async () => {
     const code = document.getElementById('gen-output')?.textContent || '';
     if (!code || code.includes('will appear here')) { showToast('Generate code first'); return; }
-
-    const steps = TestRunner.parse(code);
-    if (steps.length === 0) { showToast('No runnable Playwright steps found in code'); return; }
-
-    const section = document.getElementById('gen-run-section');
-    const results = document.getElementById('gen-run-results');
-    const summaryEl = document.getElementById('gen-run-summary');
-    section.style.display = 'block';
-    summaryEl.textContent = `0/${steps.length}`;
-
-    const icons = { pending: '⏳', running: '▶️', passed: '✅', failed: '❌', skipped: '⏭️' };
-    results.innerHTML = steps.map((s, i) =>
-      `<div class="run-step" id="run-step-${i}" style="padding:3px 6px;font-size:11px;font-family:monospace;border-bottom:1px solid var(--border,#333)">
-        <span id="run-step-icon-${i}">${icons.pending}</span> ${s.label.replace(/</g, '&lt;')}
-        <div id="run-step-detail-${i}" style="color:#ff6b6b;padding-left:20px"></div>
-      </div>`).join('');
-
-    liveBtn.disabled = true;
-    const healBtn = document.getElementById('gen-heal');
-    if (healBtn) healBtn.style.display = 'none';
-    const failedSteps = [];
-    let done = 0;
-    try {
-      const summary = await TestRunner.run(steps, (i, status, detail) => {
-        const icon = document.getElementById(`run-step-icon-${i}`);
-        if (icon) icon.textContent = icons[status] || '';
-        if (status !== 'running') {
-          done++;
-          summaryEl.textContent = `${done}/${steps.length}`;
-        }
-        if (status === 'failed' && detail) {
-          failedSteps.push({ label: steps[i].label, error: detail });
-          const d = document.getElementById(`run-step-detail-${i}`);
-          if (d) d.textContent = detail;
-        }
-        document.getElementById(`run-step-${i}`)?.scrollIntoView({ block: 'nearest' });
-      });
-      summaryEl.textContent = `✅ ${summary.passed} passed · ❌ ${summary.failed} failed · ⏭️ ${summary.skipped} skipped`;
-      showToast(summary.failed === 0 ? 'All runnable steps passed!' : `${summary.failed} step(s) failed`);
-
-      // 🎭 healer stage (official test-agents workflow): route failures to the healer agent
-      if (summary.failed > 0 && healBtn) {
-        healBtn.style.display = 'inline-block';
-        healBtn.onclick = () => {
-          const healerCode = document.getElementById('healer-code');
-          const healerError = document.getElementById('healer-error');
-          if (healerCode) healerCode.value = code;
-          if (healerError) healerError.value = failedSteps.map(f => `${f.label} → ${f.error}`).join('\n');
-          document.querySelector('.nav-btn[data-panel="healer"]')?.click();
-          document.getElementById('healer-run')?.click();
-        };
-      }
-    } catch (e) {
-      summaryEl.textContent = `Error: ${e.message}`;
-    } finally {
-      liveBtn.disabled = false;
-    }
+    await runCodeLive(code, {
+      section: document.getElementById('gen-run-section'),
+      results: document.getElementById('gen-run-results'),
+      summary: document.getElementById('gen-run-summary'),
+      btn: liveBtn,
+      healBtn: document.getElementById('gen-heal'),
+      idPrefix: 'gen-run'
+    });
   });
+}
+
+// ---- Shared run helpers (Generator + Recorder panels) ----
+async function runCodeViaBridge(code, { section, results, summary, btn }) {
+  section.style.display = 'block';
+  results.innerHTML = '<pre style="margin:0;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>';
+  const log = results.querySelector('pre');
+  summary.textContent = '🌉 connecting to bridge...';
+  btn.disabled = true;
+
+  try {
+    const res = await BridgeClient.runCode(code, (msg) => {
+      if (msg.type === 'status' || msg.type === 'output') {
+        log.textContent += msg.message || msg.line || '';
+        results.scrollTop = results.scrollHeight;
+        summary.textContent = '🏃 Playwright running (headed)...';
+      }
+    });
+    summary.textContent = res.passed ? '✅ Playwright run PASSED' : `❌ Playwright run FAILED (exit ${res.exitCode})`;
+    showToast(res.passed ? 'Real Playwright run passed!' : 'Run failed — see output');
+  } catch (e) {
+    summary.textContent = '🌉 bridge unavailable';
+    log.textContent = `${e.message}\n\nSetup (once):\n  cd PlaywrightExt/PlaywrightBridge\n  npm run setup\n\nThen keep running:\n  npm start`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runCodeLive(code, { section, results, summary, btn, healBtn, idPrefix }) {
+  const steps = TestRunner.parse(code);
+  if (steps.length === 0) { showToast('No runnable Playwright steps found in code'); return; }
+
+  section.style.display = 'block';
+  summary.textContent = `0/${steps.length}`;
+
+  const icons = { pending: '⏳', running: '▶️', passed: '✅', failed: '❌', skipped: '⏭️' };
+  results.innerHTML = steps.map((s, i) =>
+    `<div class="run-step" id="${idPrefix}-step-${i}" style="padding:3px 6px;font-size:11px;font-family:monospace;border-bottom:1px solid var(--border,#333)">
+      <span id="${idPrefix}-step-icon-${i}">${icons.pending}</span> ${s.label.replace(/</g, '&lt;')}
+      <div id="${idPrefix}-step-detail-${i}" style="color:#ff6b6b;padding-left:20px"></div>
+    </div>`).join('');
+
+  btn.disabled = true;
+  if (healBtn) healBtn.style.display = 'none';
+  const failedSteps = [];
+  let done = 0;
+  try {
+    const runSummary = await TestRunner.run(steps, (i, status, detail) => {
+      const icon = document.getElementById(`${idPrefix}-step-icon-${i}`);
+      if (icon) icon.textContent = icons[status] || '';
+      if (status !== 'running') {
+        done++;
+        summary.textContent = `${done}/${steps.length}`;
+      }
+      if (status === 'failed' && detail) {
+        failedSteps.push({ label: steps[i].label, error: detail });
+        const d = document.getElementById(`${idPrefix}-step-detail-${i}`);
+        if (d) d.textContent = detail;
+      }
+      document.getElementById(`${idPrefix}-step-${i}`)?.scrollIntoView({ block: 'nearest' });
+    });
+    summary.textContent = `✅ ${runSummary.passed} passed · ❌ ${runSummary.failed} failed · ⏭️ ${runSummary.skipped} skipped`;
+    showToast(runSummary.failed === 0 ? 'All runnable steps passed!' : `${runSummary.failed} step(s) failed`);
+
+    // 🎭 healer stage (official test-agents workflow): route failures to the healer agent
+    if (runSummary.failed > 0 && healBtn) {
+      healBtn.style.display = 'inline-block';
+      healBtn.onclick = () => {
+        const healerCode = document.getElementById('healer-code');
+        const healerError = document.getElementById('healer-error');
+        if (healerCode) healerCode.value = code;
+        if (healerError) healerError.value = failedSteps.map(f => `${f.label} → ${f.error}`).join('\n');
+        document.querySelector('.nav-btn[data-panel="healer"]')?.click();
+        document.getElementById('healer-run')?.click();
+      };
+    }
+  } catch (e) {
+    summary.textContent = `Error: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ---- 3. TEST HEALER ----
@@ -372,9 +384,12 @@ function setupRecorder() {
   const statusTxt= document.getElementById('rec-status-text');
   const countTxt = document.getElementById('rec-count');
   const output   = document.getElementById('rec-output');
+  const editBtn  = document.getElementById('rec-edit');
+  let isEditingCode = false;   // textarea currently open
+  let userEditedCode = false;  // saved manual edits — don't overwrite with regenerated code
 
   function updateRecOutput() {
-    if (recorderActions.length === 0) return;
+    if (recorderActions.length === 0 || isEditingCode || userEditedCode) return;
     const lang = document.getElementById('rec-language')?.value || 'typescript';
     const name = document.getElementById('rec-test-name')?.value || 'Recorded Test';
     const code = PlaywrightCodegen.actionsToTest(recorderActions, name, lang);
@@ -394,6 +409,8 @@ function setupRecorder() {
 
   startBtn?.addEventListener('click', () => {
     isRecording = true; recorderActions = [];
+    isEditingCode = false; userEditedCode = false;
+    if (editBtn) editBtn.textContent = '✏️ Edit';
     chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'START_RECORDING' } }, (resp) => {
       if (resp?.error || !resp?.ok) {
         // Recording never started on the page — show why instead of a fake state
@@ -454,15 +471,87 @@ function setupRecorder() {
     } catch(e) { output.textContent = `Error: ${e.message}`; }
   });
 
-  document.getElementById('rec-copy')?.addEventListener('click', () => copyText(output.textContent));
+  // ---- Edit / Save recorded code ----
+  editBtn?.addEventListener('click', () => {
+    if (!isEditingCode) {
+      if (isRecording) { showToast('Stop recording first'); return; }
+      const code = output?.textContent || '';
+      if (!code || code.includes('will generate code here')) { showToast('Record some actions first'); return; }
+      isEditingCode = true;
+      output.innerHTML = '';
+      const ta = document.createElement('textarea');
+      ta.id = 'rec-edit-area';
+      ta.value = code;
+      ta.spellcheck = false;
+      ta.style.cssText = 'width:100%;min-height:220px;resize:vertical;background:transparent;color:inherit;border:none;outline:none;font-family:monospace;font-size:inherit;white-space:pre';
+      output.appendChild(ta);
+      ta.focus();
+      editBtn.textContent = '✔ Save';
+      showToast('Editing — click Save when done');
+    } else {
+      const edited = document.getElementById('rec-edit-area')?.value ?? '';
+      isEditingCode = false;
+      userEditedCode = true;
+      output.textContent = edited;
+      lastOutput = edited;
+      editBtn.textContent = '✏️ Edit';
+      showToast('Edits saved');
+    }
+  });
+
+  // ---- Run the recorded script (same two paths as the Generator panel) ----
+  function getRecordedCode() {
+    if (isEditingCode) { showToast('Save edits first (✔ Save)'); return null; }
+    const code = output?.textContent || '';
+    if (!code || code.includes('will generate code here')) { showToast('Record some actions first'); return null; }
+    if ((document.getElementById('rec-language')?.value || 'typescript') === 'python') {
+      showToast('Run supports TypeScript/JavaScript only');
+      return null;
+    }
+    return code;
+  }
+
+  const recBridgeBtn = document.getElementById('rec-run-bridge');
+  recBridgeBtn?.addEventListener('click', async () => {
+    const code = getRecordedCode();
+    if (!code) return;
+    await runCodeViaBridge(code, {
+      section: document.getElementById('rec-run-section'),
+      results: document.getElementById('rec-run-results'),
+      summary: document.getElementById('rec-run-summary'),
+      btn: recBridgeBtn
+    });
+  });
+
+  const recLiveBtn = document.getElementById('rec-run-live');
+  recLiveBtn?.addEventListener('click', async () => {
+    const code = getRecordedCode();
+    if (!code) return;
+    await runCodeLive(code, {
+      section: document.getElementById('rec-run-section'),
+      results: document.getElementById('rec-run-results'),
+      summary: document.getElementById('rec-run-summary'),
+      btn: recLiveBtn,
+      healBtn: document.getElementById('rec-heal'),
+      idPrefix: 'rec-run'
+    });
+  });
+
+  document.getElementById('rec-copy')?.addEventListener('click', () =>
+    copyText(isEditingCode ? (document.getElementById('rec-edit-area')?.value || '') : output.textContent));
   document.getElementById('rec-export')?.addEventListener('click', () => {
-    if (output.textContent) orchestrator.getAgent('export').exportAsCode(output.textContent, 'typescript', 'recorded-test');
+    const code = isEditingCode ? (document.getElementById('rec-edit-area')?.value || '') : output.textContent;
+    if (code) orchestrator.getAgent('export').exportAsCode(code, 'typescript', 'recorded-test');
   });
   document.getElementById('rec-clear')?.addEventListener('click', () => {
     recorderActions = [];
     clearInterval(recorderInterval);
     renderActionList();
+    isEditingCode = false; userEditedCode = false;
+    if (editBtn) editBtn.textContent = '✏️ Edit';
     output.innerHTML = '<span class="output-placeholder">Recording will generate code here...</span>';
+    const runSection = document.getElementById('rec-run-section');
+    if (runSection) runSection.style.display = 'none';
   });
 }
 
