@@ -2,6 +2,12 @@
 
 AI-powered Playwright QA suite: a Chrome extension with in-browser AI test agents, a local Bridge for real Playwright runs, and a standalone multi-agent Orchestrator CLI.
 
+## 🎯 Goal
+
+- Build an AI-powered solution that solves real-world QA problems.
+- Build something practical, usable, and innovative.
+- Showcase how AI can improve efficiency, accuracy, and productivity in testing.
+
 ## Problem Statement
 
 Manual QA is slow to plan and script, and locator-based Playwright suites break the moment the DOM changes. AI coding tools live outside the browser, disconnected from the actual page under test, so fixing a broken selector still means tabbing away, inspecting the DOM by hand, and copy-pasting a patch back into the suite.
