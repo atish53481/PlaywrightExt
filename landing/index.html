@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Playwright AI Studio — Download</title>
+<meta name="description" content="Chrome extension that puts AI test-planning, generation, healing, and recording agents directly in your browser." />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <div class="brand">
+      <span class="brand-badge">P</span>
+      <span>Playwright AI Studio</span>
+    </div>
+    <nav class="nav-links">
+      <a href="#agents">Agents</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <a class="btn btn-small" href="#install">Download</a>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero">
+    <div class="hero-inner">
+      <span class="eyebrow">Chrome MV3 Extension</span>
+      <h1>AI agents for Playwright QA, built into your browser.</h1>
+      <p class="lede">
+        Plan, generate, record, and self-heal Playwright tests without leaving the page under test.
+        Playwright AI Studio pairs a side-panel agent suite with a local Bridge for real headed test runs.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#install">Download Extension (.zip)</a>
+        <a class="btn btn-ghost" href="#agents">See the agents</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="split">
+    <div class="split-col">
+      <h2>Problem</h2>
+      <p>
+        Manual QA is slow to plan and script, and locator-based Playwright suites rot the moment
+        the DOM changes. Existing AI coding tools live outside the browser, disconnected from the
+        page you're actually testing.
+      </p>
+    </div>
+    <div class="split-col">
+      <h2>Solution</h2>
+      <p>
+        A Chrome side panel with dedicated agents — Planner, Generator, Healer, Recorder, Inspector,
+        Chat — that read the live page, generate real Playwright code, and repair broken locators,
+        backed by a local Bridge for headed test runs and a standalone Orchestrator CLI for
+        full multi-agent pipelines.
+      </p>
+    </div>
+  </section>
+
+  <section id="agents" class="agents">
+    <h2>Agent suite</h2>
+    <div class="agent-grid">
+      <div class="agent-card">
+        <h3>Planner</h3>
+        <p>User story / BRD / Jira input → test strategy, functional & regression cases, RTM.</p>
+      </div>
+      <div class="agent-card">
+        <h3>Generator</h3>
+        <p>Turns a test plan into executable Playwright code — single test or full suite.</p>
+      </div>
+      <div class="agent-card">
+        <h3>Healer</h3>
+        <p>Diagnoses locator/timeout/DOM failures and proposes a fixed, confidence-scored patch.</p>
+      </div>
+      <div class="agent-card">
+        <h3>Recorder</h3>
+        <p>Records real browser interactions and streams them into valid Playwright code live.</p>
+      </div>
+      <div class="agent-card">
+        <h3>Inspector</h3>
+        <p>Highlights elements, validates locators, suggests the most stable selector.</p>
+      </div>
+      <div class="agent-card">
+        <h3>Chat</h3>
+        <p>Embedded QA assistant for Playwright, frameworks, CI/CD, and API/accessibility testing.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="screenshots" class="screenshots">
+    <h2>Screenshots</h2>
+    <div class="shot-grid">
+      <figure><img src="images/TestPlanner.png" alt="Test Planner agent panel" loading="lazy"></figure>
+      <figure><img src="images/Playwrightrecord.png" alt="Recorder panel" loading="lazy"></figure>
+      <figure><img src="images/TestHealer.png" alt="Test Healer panel" loading="lazy"></figure>
+      <figure><img src="images/01-login-recording.png" alt="Recording a login flow" loading="lazy"></figure>
+      <figure><img src="images/02-add-to-cart.png" alt="Recording add to cart" loading="lazy"></figure>
+      <figure><img src="images/05-generated-script.png" alt="Generated Playwright script" loading="lazy"></figure>
+    </div>
+  </section>
+
+  <section id="install" class="install">
+    <h2>Install</h2>
+    <ol class="steps">
+      <li><a href="playwright-ai-studio.zip" download>Download the extension .zip</a></li>
+      <li>Unzip it anywhere on disk.</li>
+      <li>Open <code>chrome://extensions</code> in Chrome.</li>
+      <li>Enable <strong>Developer mode</strong> (top right).</li>
+      <li>Click <strong>Load unpacked</strong> and select the unzipped folder.</li>
+      <li>Open any page and launch the <strong>Playwright AI Studio</strong> side panel.</li>
+    </ol>
+    <p class="note">
+      No build step, no API key required to start — the extension ships with a Mock AI provider.
+      Add a Claude / OpenAI / Gemini key, or run the local Bridge server, for real runs and live LLM output.
+    </p>
+    <a class="btn btn-primary" href="playwright-ai-studio.zip" download>Download Extension (.zip)</a>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <p>Playwright AI Studio — Chrome extension, local Bridge, and standalone multi-agent Orchestrator CLI.</p>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
