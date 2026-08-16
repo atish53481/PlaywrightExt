@@ -61,6 +61,8 @@ Deploy `landing/` as the Vercel project root for a hosted download page.
 
 Vercel: [https://playwright-ai-studio.vercel.app](https://playwright-ai-studio.vercel.app)
 
+Chrome Web Store: `[pending review — add listing URL here]`
+
 ## Screenshots
 
 | Test Planner | Recorder | Test Healer |
