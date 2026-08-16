@@ -37,6 +37,38 @@
     return normalized;
   },
 
+  // Flags clicks that fell back to a bare text="..." locator (no id/data-testid/
+  // aria-label/placeholder/name was available — see content.js getBestLocatorText)
+  // whose text implies a prior state-change (Remove/Delete/Cancel/...) with no
+  // earlier action in the same recording suggesting that state was created
+  // (Add/Create/Enable/...). Heuristic, not semantic — flags recordings that are
+  // likely to fail on a fresh run because a setup step was never captured.
+  detectRiskyActions(actions) {
+    // Deliberately narrow to object create/destroy pairs — generic form/session
+    // words (login, submit, confirm, save...) appear in nearly every recording
+    // and would neuter detection if included (verified via self-test).
+    const REMOVAL_WORDS = ['remove', 'delete', 'cancel', 'undo', 'disable', 'unsubscribe'];
+    const CREATION_WORDS = ['add', 'create', 'enable', 'subscribe'];
+    const textOf = (a) => {
+      const m = /^text="(.*)"$/.exec(a.selector || '');
+      return (m ? m[1] : a.value || a.selector || '').toLowerCase();
+    };
+
+    const risky = [];
+    actions.forEach((a, i) => {
+      if (a.type !== 'click') return;
+      const m = /^text="(.*)"$/.exec(a.selector || '');
+      if (!m) return;
+      const text = m[1].toLowerCase();
+      if (!REMOVAL_WORDS.some(w => text.includes(w))) return;
+      const hasEarlierCreation = actions.slice(0, i).some(prior => CREATION_WORDS.some(w => textOf(prior).includes(w)));
+      if (!hasEarlierCreation) {
+        risky.push({ index: i, action: a, reason: `click text="${m[1]}" looks state-dependent but no earlier action in this recording suggests that state was created` });
+      }
+    });
+    return risky;
+  },
+
   actionsToTest(actions, testName = 'Recorded test', language = 'typescript') {
     const header = language === 'typescript'
       ? `import { test, expect } from '@playwright/test';\n\ntest('${testName}', async ({ page }) => {`

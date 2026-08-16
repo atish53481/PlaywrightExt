@@ -405,6 +405,17 @@ function setupRecorder() {
       : recorderActions.map(a => `<div class="action-item"><span class="action-type">${a.type}</span><span>${a.selector || a.url || a.key || a.value || ''}</span></div>`).join('');
     list.scrollTop = list.scrollHeight;
     if (countTxt) countTxt.textContent = `${recorderActions.length} actions`;
+    renderRiskWarnings();
+  }
+
+  function renderRiskWarnings() {
+    const box = document.getElementById('rec-warnings');
+    if (!box) return;
+    const risky = PlaywrightCodegen.detectRiskyActions(recorderActions);
+    if (risky.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    box.innerHTML = `⚠ ${risky.length} action(s) may assume missing setup:<br>` +
+      risky.map(r => `&bull; ${r.reason.replace(/</g, '&lt;')}`).join('<br>');
   }
 
   startBtn?.addEventListener('click', () => {

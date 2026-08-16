@@ -1,4 +1,5 @@
 ﻿import { BaseAgent } from './base-agent.js';
+import { PlaywrightCodegen } from '../utils/playwright-codegen.js';
 
 export class RecorderAgent extends BaseAgent {
   constructor(provider) {
@@ -47,11 +48,16 @@ export class RecorderAgent extends BaseAgent {
       return '// No actions recorded yet. Start recording and interact with the page.';
     }
 
+    const risky = PlaywrightCodegen.detectRiskyActions(actions);
+    const riskyNote = risky.length
+      ? `\n\n**Risk warnings (heuristic, verify against the app):**\n${risky.map(r => `- Action #${r.index}: ${r.reason}`).join('\n')}\nFor each warning, if the missing setup step is inferable from the surrounding actions, insert it; otherwise add a comment above that line flagging the risk.`
+      : '';
+
     const prompt = `Convert these recorded browser actions into a complete Playwright ${language} test.
 
 **Test Name:** ${testName}
 **Recorded Actions:**
-${JSON.stringify(actions, null, 2)}
+${JSON.stringify(actions, null, 2)}${riskyNote}
 
 Generate:
 1. Clean Playwright ${language} test with proper locators (prefer getByRole, getByLabel, getByTestId)
