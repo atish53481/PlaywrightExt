@@ -6,10 +6,15 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import type { Config } from './config';
 import type { Db } from './db';
+import { registerAuth, SESSION_COOKIE } from './plugins/auth';
 import { registerErrorHandling } from './plugins/error-handler';
+import { AuditRepository } from './repositories/audit-repository';
+import { SessionRepository } from './repositories/session-repository';
+import { UserRepository } from './repositories/user-repository';
+import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
-
-export const SESSION_COOKIE = 'pw_session';
+import { AuditService } from './services/audit-service';
+import { AuthService } from './services/auth-service';
 
 export interface AppDeps {
   config: Config;
@@ -53,6 +58,14 @@ export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance
     keyGenerator: (req) => req.headers.authorization ?? req.cookies[SESSION_COOKIE] ?? req.ip,
   });
 
+  // Composition root: the only place repositories and services are constructed.
+  const users = new UserRepository(db);
+  const sessions = new SessionRepository(db);
+  const audit = new AuditService(new AuditRepository(db), app.log);
+  const auth = new AuthService(users, sessions, audit);
+
+  registerAuth(app, auth);
+
   await app.register(
     async (api) => {
       await api.register(healthRoutes, {
@@ -60,6 +73,7 @@ export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance
           await db.raw('select 1');
         },
       });
+      await api.register(authRoutes, { auth, config });
     },
     { prefix: '/api' },
   );

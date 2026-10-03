@@ -1,6 +1,7 @@
 import { loadEnvFile } from '../config';
 import { createDb } from '../db';
 import { migrateLatest, rollbackLast } from '../migrate';
+import { seedAdmin } from '../seed';
 
 async function main(): Promise<void> {
   loadEnvFile();
@@ -20,6 +21,9 @@ async function main(): Promise<void> {
     } else if (command === 'rollback') {
       const [batch, names] = await rollbackLast(db);
       console.log(names.length ? `Batch ${batch} rolled back: ${names.join(', ')}` : 'Nothing to roll back.');
+    } else if (command === 'seed') {
+      const outcome = await seedAdmin(db, process.env);
+      console.log(outcome === 'created' ? 'Admin user created.' : 'Admin user already exists; nothing changed.');
     } else {
       console.error('Usage: tsx src/scripts/db.ts migrate|rollback|seed');
       process.exitCode = 1;
