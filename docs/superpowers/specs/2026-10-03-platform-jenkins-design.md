@@ -1,7 +1,7 @@
 # Platform Jenkins Execution — Design
 
 Date: 2026-10-03
-Status: awaiting review
+Status: approved
 Sub-project: 4 of 5 (see `2026-10-03-platform-foundation-design.md`, section 1). Sub-project 3 (Skills) is not built; the two are independent.
 Source requirements: `../Req.md` sections 8, 10, 19–25, 27, 30, 39 (one level above this repo), and the owner's direction of 2026-10-03 quoted in section 2
 Branch: `feat/platform-jenkins`, cut from `feat/platform-scripts`
