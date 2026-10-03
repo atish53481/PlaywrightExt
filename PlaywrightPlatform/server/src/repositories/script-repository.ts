@@ -113,6 +113,14 @@ export interface ScriptListQuery {
   pageSize: number;
 }
 
+export interface ScriptChanges {
+  name?: string;
+  description?: string;
+  testScenario?: string;
+  /** New content together with its version number. */
+  newVersion?: { content: string; version: number };
+}
+
 export class ScriptRepository {
   constructor(private readonly db: Db) {}
 
@@ -195,5 +203,41 @@ export class ScriptRepository {
       source: input.source,
       created_by: input.createdBy,
     });
+  }
+
+  /**
+   * Locks the script row until the transaction ends and reports whether it exists.
+   * Call it first in any transaction that reads the version and then writes: a
+   * concurrent writer waits here and then sees the first one's result.
+   */
+  async lock(id: number): Promise<boolean> {
+    const row = await this.db('test_scripts').where({ id }).whereNot('status', 'DELETED').forUpdate().first('id');
+    return Boolean(row);
+  }
+
+  async update(id: number, changes: ScriptChanges, updatedBy: number): Promise<void> {
+    const columns: Record<string, unknown> = { updated_at: this.db.fn.now(), updated_by: updatedBy };
+    if (changes.name !== undefined) columns.name = changes.name;
+    if (changes.description !== undefined) columns.description = changes.description;
+    if (changes.testScenario !== undefined) columns.test_scenario = changes.testScenario;
+    if (changes.newVersion) {
+      columns.script_content = changes.newVersion.content;
+      columns.version = changes.newVersion.version;
+      columns.lifecycle_state = 'SAVED';
+    }
+    await this.db('test_scripts').where({ id }).update(columns);
+  }
+
+  async softDelete(id: number, deletedBy: number): Promise<boolean> {
+    const count = await this.db('test_scripts')
+      .where({ id })
+      .whereNot('status', 'DELETED')
+      .update({
+        status: 'DELETED',
+        deleted_at: this.db.fn.now(),
+        deleted_by: deletedBy,
+        updated_at: this.db.fn.now(),
+      });
+    return count > 0;
   }
 }

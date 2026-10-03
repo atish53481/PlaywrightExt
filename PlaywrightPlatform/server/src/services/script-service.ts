@@ -20,6 +20,19 @@ export interface CreateScriptInput {
   changeSummary: string;
 }
 
+export interface UpdateScriptInput {
+  name?: string;
+  description?: string;
+  testScenario?: string;
+  tags?: string[];
+  content?: string;
+  changeSummary?: string;
+  /** The version the caller's content was based on. Required with `content`. */
+  baseVersion?: number;
+}
+
+const METADATA_FIELDS = ['name', 'description', 'testScenario', 'tags'] as const;
+
 function projectNotActive(): AppError {
   return new AppError(409, 'PROJECT_NOT_ACTIVE', 'This project is archived. Restore it to change its scripts.');
 }
@@ -102,6 +115,83 @@ export class ScriptService {
     }
     this.log.info(`[SCRIPT] Created script ${script.id} in project ${projectId}`);
     return script;
+  }
+
+  async update(actor: Actor, id: number, input: UpdateScriptInput): Promise<Script> {
+    let saved: { script: Script; note: string | null };
+    try {
+      saved = await this.transact(async (r) => {
+        if (!(await r.scripts.lock(id))) throw notFound('Script');
+        const current = await r.scripts.findLive(id);
+        if (!current) throw notFound('Script'); // its project is deleted
+        if (current.projectStatus !== 'ACTIVE') throw projectNotActive();
+
+        if (input.content !== undefined && input.baseVersion !== current.version) {
+          throw new AppError(
+            409,
+            'VERSION_CONFLICT',
+            `This script is now at v${current.version}. Your changes were based on v${input.baseVersion}.`,
+            { currentVersion: current.version, updatedBy: current.updatedBy },
+          );
+        }
+
+        const next =
+          input.content !== undefined && input.content !== current.content
+            ? { content: input.content, version: current.version + 1 }
+            : null;
+        const changed: string[] = METADATA_FIELDS.filter((field) => input[field] !== undefined);
+        if (!next && changed.length === 0) return { script: current, note: null };
+
+        await r.scripts.update(
+          id,
+          {
+            name: input.name,
+            description: input.description,
+            testScenario: input.testScenario,
+            newVersion: next ?? undefined,
+          },
+          actor.userId,
+        );
+        if (next) {
+          await r.scripts.insertVersion({
+            scriptId: id,
+            version: next.version,
+            content: next.content,
+            changeSummary: input.changeSummary ?? '',
+            source: 'MANUAL',
+            createdBy: actor.userId,
+          });
+        }
+        if (input.tags !== undefined) await r.tags.setForScript(id, input.tags);
+        await this.record(
+          actor,
+          next ? 'script.version' : 'script.update',
+          id,
+          next ? { version: next.version, changed: [...changed, 'content'] } : { changed },
+          r.audit,
+        );
+        return {
+          script: found(await r.scripts.findLive(id)),
+          note: next ? `Saved script ${id} as v${next.version}` : `Updated script ${id}`,
+        };
+      });
+    } catch (err) {
+      if (isScriptNameClash(err)) throw nameTaken(input.name ?? '');
+      throw err;
+    }
+    if (saved.note) this.log.info(`[SCRIPT] ${saved.note}`);
+    return saved.script;
+  }
+
+  async remove(actor: Actor, id: number): Promise<void> {
+    await this.transact(async (r) => {
+      const script = await r.scripts.findLive(id);
+      if (!script) throw notFound('Script');
+      if (script.projectStatus !== 'ACTIVE') throw projectNotActive();
+      if (!(await r.scripts.softDelete(id, actor.userId))) throw notFound('Script');
+      await this.record(actor, 'script.delete', id, { name: script.name, version: script.version }, r.audit);
+    });
+    this.log.info(`[SCRIPT] Deleted script ${id}`);
   }
 
   /** Writes the audit row inside the caller's transaction. Never pass script content in `details`. */

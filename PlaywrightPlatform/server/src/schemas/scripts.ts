@@ -138,3 +138,23 @@ export const scriptListResponse = z.object({
 });
 
 export const tagListResponse = z.object({ items: z.array(z.string()) });
+
+const CHANGEABLE = ['name', 'description', 'testScenario', 'tags', 'content'] as const;
+
+export const updateScriptBody = z
+  .object({
+    name: name.optional(),
+    description: description.optional(),
+    testScenario: testScenario.optional(),
+    tags: tags.optional(),
+    content: content.optional(),
+    changeSummary: changeSummary.optional(),
+    baseVersion: z.number().int().min(1).max(2_147_483_647).optional(),
+  })
+  .refine((body) => CHANGEABLE.some((key) => body[key] !== undefined), {
+    message: 'Provide at least one field to change.',
+  })
+  .refine((body) => body.content === undefined || body.baseVersion !== undefined, {
+    message: 'baseVersion is required when content is sent.',
+    path: ['baseVersion'],
+  });

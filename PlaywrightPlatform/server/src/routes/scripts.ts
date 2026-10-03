@@ -13,6 +13,7 @@ import {
   tagListResponse,
   toScriptDto,
   toScriptListItemDto,
+  updateScriptBody,
 } from '../schemas/scripts';
 import type { ScriptService } from '../services/script-service';
 
@@ -58,5 +59,17 @@ export async function scriptRoutes(app: FastifyInstance, deps: ScriptRouteDeps):
   app.get('/scripts/:id', { preHandler: signedIn }, async (req) => {
     const { id } = parse(idParams, req.params);
     return shape(scriptResponse, { script: toScriptDto(await deps.scripts.get(id)) });
+  });
+
+  app.put('/scripts/:id', { preHandler: writers, bodyLimit: SCRIPT_BODY_LIMIT }, async (req) => {
+    const { id } = parse(idParams, req.params);
+    const body = parse(updateScriptBody, req.body);
+    return shape(scriptResponse, { script: toScriptDto(await deps.scripts.update(actorOf(req), id, body)) });
+  });
+
+  app.delete('/scripts/:id', { preHandler: writers }, async (req, reply) => {
+    const { id } = parse(idParams, req.params);
+    await deps.scripts.remove(actorOf(req), id);
+    return reply.status(204).send();
   });
 }
