@@ -12,6 +12,11 @@ function normalizeUrl(url) {
   return trimmed;
 }
 
+// Ids go into URL paths, so anything but a positive whole number is refused before a request is made.
+function positiveId(value, message) {
+  if (!Number.isInteger(value) || value <= 0) throw new Error(message);
+}
+
 export function createPlatformClient({ fetchFn, storage }) {
   async function request(baseUrl, path, { method = 'GET', token = '', body } = {}) {
     const headers = {};
@@ -37,6 +42,9 @@ export function createPlatformClient({ fetchFn, storage }) {
       const detail = Array.isArray(data?.error?.details) ? data.error.details[0]?.message : null;
       const err = new Error(detail || data?.error?.message || `Platform request failed (${res.status})`);
       err.status = res.status;
+      // Lets a caller react to one particular refusal, such as RUN_IN_PROGRESS.
+      err.code = data?.error?.code ?? null;
+      err.details = data?.error?.details ?? null;
       throw err;
     }
     return { status: res.status, data };
@@ -96,8 +104,7 @@ export function createPlatformClient({ fetchFn, storage }) {
     // Creates a script, with its first version, in a project. `source` is GENERATED or RECORDED;
     // `language` is TypeScript or JavaScript.
     async saveScript(projectId, { name, description = '', content, source, language }) {
-      // The id goes into the URL path, so anything but a positive whole number is refused.
-      if (!Number.isInteger(projectId) || projectId <= 0) throw new Error('Choose a project.');
+      positiveId(projectId, 'Choose a project.');
       const platform = await signedIn();
       const { data } = await request(platform.url, `/projects/${projectId}/scripts`, {
         method: 'POST',
@@ -105,6 +112,100 @@ export function createPlatformClient({ fetchFn, storage }) {
         body: { name, description, content, source, language },
       });
       return data.script;
+    },
+
+    // A project's scripts, most recently updated first. `search` matches the name,
+    // description, test scenario, and tags.
+    async listScripts(projectId, search = '') {
+      positiveId(projectId, 'Choose a project.');
+      const platform = await signedIn();
+      const query = new URLSearchParams({ pageSize: '100' });
+      const text = String(search || '').trim();
+      if (text) query.set('search', text);
+      const { data } = await request(platform.url, `/projects/${projectId}/scripts?${query}`, { token: platform.token });
+      return data.items;
+    },
+
+    // One script with its content.
+    async getScript(scriptId) {
+      positiveId(scriptId, 'Choose a script.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/scripts/${scriptId}`, { token: platform.token });
+      return data.script;
+    },
+
+    // { configured, baseUrl, username, jobName, hasToken }. The address and username are empty
+    // unless the signed-in user is an ADMIN. The token is never returned.
+    async getJenkinsSettings() {
+      const platform = await signedIn();
+      const { data } = await request(platform.url, '/jenkins/settings', { token: platform.token });
+      return data.settings;
+    },
+
+    // An empty token keeps the one the server already has; an empty job name means the default.
+    async saveJenkinsSettings({ baseUrl, username, jobName = '', token = '' }) {
+      const platform = await signedIn();
+      const body = { baseUrl, username };
+      if (jobName) body.jobName = jobName;
+      if (token) body.token = token;
+      const { data } = await request(platform.url, '/jenkins/settings', { method: 'PUT', token: platform.token, body });
+      return data.settings;
+    },
+
+    // Tries a connection: { ok, version, pipelinePlugin, message }. Only the fields that were
+    // filled in are sent; the server uses the saved value for the rest.
+    async testJenkins({ baseUrl = '', username = '', token = '' } = {}) {
+      const platform = await signedIn();
+      const body = {};
+      if (baseUrl) body.baseUrl = baseUrl;
+      if (username) body.username = username;
+      if (token) body.token = token;
+      const { data } = await request(platform.url, '/jenkins/test', { method: 'POST', token: platform.token, body });
+      return data;
+    },
+
+    // Creates the pipeline job in Jenkins, or updates its definition: { created, jobUrl }.
+    async createJenkinsJob() {
+      const platform = await signedIn();
+      const { data } = await request(platform.url, '/jenkins/job', { method: 'POST', token: platform.token });
+      return data;
+    },
+
+    // Starts a run of the script's current version on Jenkins and returns the run.
+    async runScript(scriptId) {
+      positiveId(scriptId, 'Choose a script.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/scripts/${scriptId}/run`, { method: 'POST', token: platform.token });
+      return data.execution;
+    },
+
+    // Reads a run. The server brings an unfinished run up to date with Jenkins first.
+    async getExecution(executionId) {
+      positiveId(executionId, 'Choose a run.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/executions/${executionId}`, { token: platform.token });
+      return data.execution;
+    },
+
+    async stopExecution(executionId) {
+      positiveId(executionId, 'Choose a run.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/executions/${executionId}/stop`, {
+        method: 'POST',
+        token: platform.token,
+      });
+      return data.execution;
+    },
+
+    // A script's runs, newest first, as stored (Jenkins is not asked). `limit` is 1 to 50.
+    async listExecutions(scriptId, limit = 10) {
+      positiveId(scriptId, 'Choose a script.');
+      const platform = await signedIn();
+      const size = Number.isInteger(limit) && limit >= 1 && limit <= 50 ? limit : 10;
+      const { data } = await request(platform.url, `/scripts/${scriptId}/executions?limit=${size}`, {
+        token: platform.token,
+      });
+      return data.items;
     },
   };
 }

@@ -183,4 +183,131 @@ describe('platform client', () => {
     }
     assert.equal(calls.length, 0);
   });
+
+  const SIGNED_IN = { url: 'http://localhost:3000', token: 'tok-123', user: USER };
+
+  it("listScripts asks for a project's scripts, with the search text when given", async () => {
+    saved = SIGNED_IN;
+    responder = () => json(200, { items: [{ id: 3, name: 'Login Test' }], total: 1, page: 1, pageSize: 100 });
+    assert.deepEqual(await client.listScripts(7), [{ id: 3, name: 'Login Test' }]);
+    assert.equal(calls[0].url, 'http://localhost:3000/api/projects/7/scripts?pageSize=100');
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer tok-123');
+
+    await client.listScripts(7, '  log in & out ');
+    assert.equal(calls[1].url, 'http://localhost:3000/api/projects/7/scripts?pageSize=100&search=log+in+%26+out');
+  });
+
+  it('getScript returns the script with its content', async () => {
+    saved = SIGNED_IN;
+    responder = () => json(200, { script: { id: 3, content: 'x' } });
+    assert.deepEqual(await client.getScript(3), { id: 3, content: 'x' });
+    assert.equal(calls[0].url, 'http://localhost:3000/api/scripts/3');
+  });
+
+  it('Jenkins settings: reads them, and saves without a token unless one was typed', async () => {
+    saved = SIGNED_IN;
+    const settings = { configured: true, baseUrl: 'http://localhost:7070', username: 'ci', jobName: 'run', hasToken: true };
+    responder = () => json(200, { settings });
+    assert.deepEqual(await client.getJenkinsSettings(), settings);
+    assert.equal(calls[0].url, 'http://localhost:3000/api/jenkins/settings');
+
+    const kept = await client.saveJenkinsSettings({ baseUrl: 'http://localhost:7070', username: 'ci', jobName: 'run', token: '' });
+    assert.deepEqual(kept, settings);
+    assert.equal(calls[1].init.method, 'PUT');
+    assert.deepEqual(JSON.parse(calls[1].init.body), { baseUrl: 'http://localhost:7070', username: 'ci', jobName: 'run' });
+
+    await client.saveJenkinsSettings({ baseUrl: 'http://localhost:7070', username: 'ci', jobName: '', token: 'secret' });
+    assert.deepEqual(JSON.parse(calls[2].init.body), { baseUrl: 'http://localhost:7070', username: 'ci', token: 'secret' });
+  });
+
+  it('testJenkins sends only the fields that were filled in', async () => {
+    saved = SIGNED_IN;
+    const result = { ok: true, version: '2.555.2', pipelinePlugin: true, message: 'Connected to Jenkins 2.555.2.' };
+    responder = () => json(200, result);
+    assert.deepEqual(await client.testJenkins({ baseUrl: 'http://localhost:7070', username: '', token: 'secret' }), result);
+    assert.equal(calls[0].url, 'http://localhost:3000/api/jenkins/test');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0].init.body), { baseUrl: 'http://localhost:7070', token: 'secret' });
+
+    await client.testJenkins();
+    assert.deepEqual(JSON.parse(calls[1].init.body), {});
+  });
+
+  it('createJenkinsJob, runScript, and stopExecution post without a body', async () => {
+    saved = SIGNED_IN;
+    responder = (url) =>
+      url.endsWith('/jenkins/job')
+        ? json(200, { created: true, jobUrl: 'http://localhost:7070/job/run/' })
+        : json(url.endsWith('/run') ? 201 : 200, { execution: { id: 12, status: 'QUEUED' } });
+
+    assert.deepEqual(await client.createJenkinsJob(), { created: true, jobUrl: 'http://localhost:7070/job/run/' });
+    assert.deepEqual(await client.runScript(3), { id: 12, status: 'QUEUED' });
+    assert.deepEqual(await client.stopExecution(12), { id: 12, status: 'QUEUED' });
+
+    assert.deepEqual(
+      calls.map((call) => call.url),
+      [
+        'http://localhost:3000/api/jenkins/job',
+        'http://localhost:3000/api/scripts/3/run',
+        'http://localhost:3000/api/executions/12/stop',
+      ],
+    );
+    for (const call of calls) {
+      assert.equal(call.init.method, 'POST');
+      assert.equal(call.init.body, undefined);
+      // The server refuses a JSON content type that comes with no body.
+      assert.equal(call.init.headers['Content-Type'], undefined);
+    }
+  });
+
+  it('getExecution and listExecutions read runs', async () => {
+    saved = SIGNED_IN;
+    responder = (url) =>
+      url.includes('/scripts/') ? json(200, { items: [{ id: 12 }] }) : json(200, { execution: { id: 12 } });
+    assert.deepEqual(await client.getExecution(12), { id: 12 });
+    assert.equal(calls[0].url, 'http://localhost:3000/api/executions/12');
+    assert.deepEqual(await client.listExecutions(3), [{ id: 12 }]);
+    assert.equal(calls[1].url, 'http://localhost:3000/api/scripts/3/executions?limit=10');
+    await client.listExecutions(3, 5);
+    assert.equal(calls[2].url, 'http://localhost:3000/api/scripts/3/executions?limit=5');
+    await client.listExecutions(3, 500);
+    assert.equal(calls[3].url, 'http://localhost:3000/api/scripts/3/executions?limit=10');
+  });
+
+  it('a refused run carries the server code and details, so the panel can show the run in progress', async () => {
+    saved = SIGNED_IN;
+    responder = () =>
+      json(409, {
+        error: {
+          code: 'RUN_IN_PROGRESS',
+          message: 'This script is already running. Wait for that run to finish, or stop it.',
+          details: { executionId: 12 },
+        },
+      });
+    await assert.rejects(client.runScript(3), (err) => {
+      assert.equal(err.status, 409);
+      assert.equal(err.code, 'RUN_IN_PROGRESS');
+      assert.deepEqual(err.details, { executionId: 12 });
+      assert.match(err.message, /already running/);
+      return true;
+    });
+  });
+
+  it('the new methods refuse ids that are not positive whole numbers, and need a sign-in', async () => {
+    saved = SIGNED_IN;
+    for (const bad of ['3/../../users', 0, -1, 1.5, NaN, undefined]) {
+      await assert.rejects(client.listScripts(bad), /Choose a project/);
+      await assert.rejects(client.getScript(bad), /Choose a script/);
+      await assert.rejects(client.runScript(bad), /Choose a script/);
+      await assert.rejects(client.listExecutions(bad), /Choose a script/);
+      await assert.rejects(client.getExecution(bad), /Choose a run/);
+      await assert.rejects(client.stopExecution(bad), /Choose a run/);
+    }
+    assert.equal(calls.length, 0);
+
+    saved = { url: '', token: '', user: null };
+    await assert.rejects(client.getJenkinsSettings(), /Sign in to the platform first/);
+    await assert.rejects(client.runScript(3), /Sign in to the platform first/);
+    assert.equal(calls.length, 0);
+  });
 });
