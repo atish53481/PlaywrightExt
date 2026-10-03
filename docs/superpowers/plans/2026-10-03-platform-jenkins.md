@@ -1517,8 +1517,8 @@ Expected: 10 passed; typecheck clean; whole suite green.
 
 - [ ] **Step 8: Check the layering and commit**
 
-Run: `grep -rn "fetch(" PlaywrightPlatform/server/src --include=*.ts | grep -v jenkins-client.ts`
-Expected: no output.
+Run: `grep -rn "fetch(" PlaywrightPlatform/server/src --include=*.ts | grep -v -e jenkins-client.ts -e jenkins/pipeline.ts`
+Expected: no output. (`pipeline.ts` is left out because the `fetch` in it is text: the report script that the Jenkins build runs.)
 
 ```bash
 git add PlaywrightPlatform/server/src PlaywrightPlatform/server/test/jenkins-settings.test.ts
@@ -3470,8 +3470,8 @@ Expected: 12 passed; typecheck clean; whole suite green.
 
 - [ ] **Step 6: Check the layering and the token, then commit**
 
-Run (from the repo root): `grep -rn "fetch(" PlaywrightPlatform/server/src --include=*.ts | grep -v jenkins-client.ts`
-Expected: no output.
+Run (from the repo root): `grep -rn "fetch(" PlaywrightPlatform/server/src --include=*.ts | grep -v -e jenkins-client.ts -e jenkins/pipeline.ts`
+Expected: no output. (`pipeline.ts` is left out because the `fetch` in it is text: the report script that the Jenkins build runs.)
 
 Run: `grep -rnE "log\.(info|warn|error)\(.*(token|Token)" PlaywrightPlatform/server/src/services/execution-service.ts PlaywrightPlatform/server/src/services/jenkins-service.ts`
 Expected: no output — no log line mentions a token.
