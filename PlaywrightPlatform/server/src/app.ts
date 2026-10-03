@@ -6,17 +6,20 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import type { Config } from './config';
+import { createSecretBox } from './crypto/secret-box';
 import type { Db } from './db';
 import { registerAuth } from './plugins/auth';
 import { registerErrorHandling } from './plugins/error-handler';
 import { createRepos, createTransact } from './repositories';
 import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
+import { jenkinsRoutes } from './routes/jenkins';
 import { projectRoutes } from './routes/projects';
 import { scriptRoutes } from './routes/scripts';
 import { userRoutes } from './routes/users';
 import { AuditService } from './services/audit-service';
 import { AuthService } from './services/auth-service';
+import { JenkinsService } from './services/jenkins-service';
 import { ProjectService } from './services/project-service';
 import { ScriptService } from './services/script-service';
 import { UserService } from './services/user-service';
@@ -75,6 +78,7 @@ export async function buildApp({ config, db, webRoot }: AppDeps): Promise<Fastif
   const userService = new UserService(repos.users, audit, transact, app.log);
   const projectService = new ProjectService(repos.projects, audit, transact, app.log);
   const scriptService = new ScriptService(repos.scripts, repos.projects, repos.tags, audit, transact, app.log);
+  const jenkinsService = new JenkinsService(repos.jenkins, audit, transact, createSecretBox(config.secretsKey), app.log);
 
   registerAuth(app, auth);
 
@@ -89,6 +93,7 @@ export async function buildApp({ config, db, webRoot }: AppDeps): Promise<Fastif
       await api.register(userRoutes, { users: userService });
       await api.register(projectRoutes, { projects: projectService });
       await api.register(scriptRoutes, { scripts: scriptService });
+      await api.register(jenkinsRoutes, { jenkins: jenkinsService });
     },
     { prefix: '/api' },
   );

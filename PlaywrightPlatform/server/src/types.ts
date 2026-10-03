@@ -119,3 +119,12 @@ export interface ScriptVersionSummary {
 export interface ScriptVersion extends ScriptVersionSummary {
   content: string;
 }
+
+/** The one Jenkins connection of the installation. The token is held only as ciphertext. */
+export interface JenkinsSettings {
+  id: number;
+  baseUrl: string;
+  username: string;
+  jobName: string;
+  secretCiphertext: string | null;
+}
