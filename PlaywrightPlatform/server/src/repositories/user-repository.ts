@@ -90,8 +90,12 @@ export class UserRepository {
     await this.db('users').where({ id }).update({ last_login_at: this.db.fn.now() });
   }
 
-  async countActiveAdmins(): Promise<number> {
-    const row = await this.db('users').where({ role: 'ADMIN', status: 'ACTIVE' }).count('* as n').first();
-    return Number(row?.n ?? 0);
+  /**
+   * Locks every active ADMIN row and returns how many there are. Call inside a
+   * transaction: a concurrent demotion then waits here and sees the first one's result.
+   */
+  async lockActiveAdmins(): Promise<number> {
+    const rows = await this.db('users').where({ role: 'ADMIN', status: 'ACTIVE' }).forUpdate().select('id');
+    return rows.length;
   }
 }

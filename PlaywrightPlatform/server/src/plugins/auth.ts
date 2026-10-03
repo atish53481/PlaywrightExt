@@ -9,28 +9,38 @@ export const SESSION_COOKIE = 'pw_session';
 declare module 'fastify' {
   interface FastifyRequest {
     auth: AuthContext | null;
+    /** Set when the session lookup itself failed (for example the database is down). */
+    authError: unknown;
   }
 }
 
 /** Resolves the caller once per request. Routes opt in to enforcement with the guards below. */
 export function registerAuth(app: FastifyInstance, authService: AuthService): void {
   app.decorateRequest('auth', null);
+  app.decorateRequest('authError', null);
   app.addHook('onRequest', async (req) => {
-    const header = req.headers.authorization;
-    if (header?.startsWith('Bearer ')) {
-      const found = await authService.resolve(header.slice('Bearer '.length).trim(), 'EXTENSION');
-      if (found) req.auth = { ...found, via: 'bearer' };
-      return;
-    }
-    const cookieToken = req.cookies[SESSION_COOKIE];
-    if (cookieToken) {
-      const found = await authService.resolve(cookieToken, 'WEB');
-      if (found) req.auth = { ...found, via: 'cookie' };
+    try {
+      const header = req.headers.authorization;
+      if (header?.startsWith('Bearer ')) {
+        const found = await authService.resolve(header.slice('Bearer '.length).trim(), 'EXTENSION');
+        if (found) req.auth = { ...found, via: 'bearer' };
+        return;
+      }
+      const cookieToken = req.cookies[SESSION_COOKIE];
+      if (cookieToken) {
+        const found = await authService.resolve(cookieToken, 'WEB');
+        if (found) req.auth = { ...found, via: 'cookie' };
+      }
+    } catch (err) {
+      // Routes that need no session (health, static files) must still answer.
+      // Guarded routes rethrow this in requireAuth, so it is never mistaken for "not signed in".
+      req.authError = err;
     }
   });
 }
 
 async function requireAuth(req: FastifyRequest): Promise<void> {
+  if (req.authError) throw req.authError;
   if (!req.auth) throw new AppError(401, 'UNAUTHENTICATED', 'Sign in to continue.');
 }
 

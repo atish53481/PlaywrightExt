@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import { loadConfig, loadEnvFile, type Config } from '../src/config';
 import { createDb, type Db } from '../src/db';
+import { assertDisposableDatabase } from '../src/migrate';
 import { PLATFORM_TABLES } from '../src/migrations/tables';
 import { UserRepository } from '../src/repositories/user-repository';
 import { hashPassword } from '../src/security/passwords';
@@ -43,6 +44,7 @@ export async function closeApp(ctx: TestContext): Promise<void> {
 
 /** Empties every platform table and restarts identity counters. */
 export async function resetDb(db: Db): Promise<void> {
+  assertDisposableDatabase(testConfig().databaseUrl);
   await db.raw(`truncate table ${PLATFORM_TABLES.join(', ')} restart identity cascade`);
 }
 

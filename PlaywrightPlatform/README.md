@@ -63,7 +63,12 @@ NODE_ENV=production npm run start
 
 The server then serves the web app and the API from one origin on `APP_PORT`.
 Put it behind HTTPS: in production the session cookie is `Secure` and the security
-headers tell browsers to upgrade requests to HTTPS. Set `APP_HOST=0.0.0.0` only when a
+headers tell browsers to upgrade requests to HTTPS. Behind a reverse proxy also set
+`TRUST_PROXY` to the proxy's own address or CIDR range (`loopback` for a proxy on the
+same host); otherwise every request appears to come from the proxy, so the login rate
+limit is shared by all users and audit rows record the proxy's address. Leave it
+`false` when there is no proxy: trusting forwarded headers from anyone lets a client
+forge its address. Set `APP_HOST=0.0.0.0` only when a
 reverse proxy or firewall controls access.
 
 ## Database commands

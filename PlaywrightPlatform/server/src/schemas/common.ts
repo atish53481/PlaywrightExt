@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import type { User } from '../types';
 
-export const roleSchema = z.enum(['ADMIN', 'USER', 'VIEWER']);
+/** PostgreSQL text cannot hold a NUL byte; reject it here so it is a 400, not a database error. */
+export function cleanText(schema: z.ZodString) {
+  return schema.refine((v) => !v.includes('\u0000'), { message: 'must not contain null characters' });
+}
+
+export const roleSchema =z.enum(['ADMIN', 'USER', 'VIEWER']);
 export const userStatusSchema = z.enum(['ACTIVE', 'DISABLED']);
 
 /** Path ids. The upper bound keeps absurd values from reaching PostgreSQL as out-of-range bigints. */

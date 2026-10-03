@@ -7,12 +7,9 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import type { Config } from './config';
 import type { Db } from './db';
-import { registerAuth, SESSION_COOKIE } from './plugins/auth';
+import { registerAuth } from './plugins/auth';
 import { registerErrorHandling } from './plugins/error-handler';
-import { AuditRepository } from './repositories/audit-repository';
-import { ProjectRepository } from './repositories/project-repository';
-import { SessionRepository } from './repositories/session-repository';
-import { UserRepository } from './repositories/user-repository';
+import { createRepos, createTransact } from './repositories';
 import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
 import { projectRoutes } from './routes/projects';
@@ -45,6 +42,8 @@ export async function buildApp({ config, db, webRoot }: AppDeps): Promise<Fastif
         ? false
         : { level: config.logLevel, redact: { paths: REDACT_PATHS, censor: '[redacted]' } },
     genReqId: () => randomUUID(),
+    // Off unless configured: trusting X-Forwarded-For without a proxy lets clients forge their address.
+    trustProxy: config.trustProxy,
   });
 
   registerErrorHandling(app, { spaFallback: Boolean(webRoot) });
@@ -59,18 +58,20 @@ export async function buildApp({ config, db, webRoot }: AppDeps): Promise<Fastif
   await app.register(cookie);
   await app.register(rateLimit, {
     global: true,
-    max: 300,
+    max: config.rateLimitMax,
     timeWindow: '1 minute',
-    keyGenerator: (req) => req.headers.authorization ?? req.cookies[SESSION_COOKIE] ?? req.ip,
+    // Keyed on the resolved caller, never on raw header or cookie text: otherwise a
+    // client gets a fresh bucket per request just by sending a different junk value.
+    keyGenerator: (req) => (req.auth ? `session:${req.auth.session.id}` : `ip:${req.ip}`),
   });
 
   // Composition root: the only place repositories and services are constructed.
-  const users = new UserRepository(db);
-  const sessions = new SessionRepository(db);
-  const audit = new AuditService(new AuditRepository(db), app.log);
-  const auth = new AuthService(users, sessions, audit);
-  const userService = new UserService(users, sessions, audit, app.log);
-  const projectService = new ProjectService(new ProjectRepository(db), audit, app.log);
+  const repos = createRepos(db);
+  const transact = createTransact(db);
+  const audit = new AuditService(repos.audit, app.log);
+  const auth = new AuthService(repos.users, repos.sessions, audit, transact);
+  const userService = new UserService(repos.users, audit, transact, app.log);
+  const projectService = new ProjectService(repos.projects, audit, transact, app.log);
 
   registerAuth(app, auth);
 

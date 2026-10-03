@@ -19,8 +19,9 @@ export class AuditService {
     private readonly log: FastifyBaseLogger,
   ) {}
 
-  async record(entry: AuditEntry): Promise<void> {
-    await this.repo.insert({ ...entry, details: entry.details ?? null });
+  /** Pass the transaction's audit repository as `repo` to commit the row with the change it describes. */
+  async record(entry: AuditEntry, repo: AuditRepository = this.repo): Promise<void> {
+    await repo.insert({ ...entry, details: entry.details ?? null });
     this.log.info(
       { action: entry.action, resource: entry.resource, resourceId: entry.resourceId, userId: entry.userId },
       `[AUDIT] ${entry.action} ${entry.result}`,

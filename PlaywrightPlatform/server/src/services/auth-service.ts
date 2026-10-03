@@ -1,4 +1,5 @@
 import { AppError } from '../errors';
+import type { Transact } from '../repositories';
 import type { SessionRepository } from '../repositories/session-repository';
 import type { UserRepository } from '../repositories/user-repository';
 import { hashPassword, verifyPassword } from '../security/passwords';
@@ -31,6 +32,7 @@ export class AuthService {
     private readonly users: UserRepository,
     private readonly sessions: SessionRepository,
     private readonly audit: AuditService,
+    private readonly transact: Transact,
   ) {}
 
   async login(input: LoginInput): Promise<LoginResult> {
@@ -54,23 +56,29 @@ export class AuthService {
     const token = newToken();
     const csrfToken = newToken();
     const expiresAt = new Date(Date.now() + (kind === 'WEB' ? WEB_SESSION_MS : EXTENSION_SESSION_MS));
-    const session = await this.sessions.create({
-      userId: found.id,
-      tokenHash: hashToken(token),
-      kind,
-      csrfSecret: csrfToken,
-      expiresAt,
-    });
-    await this.users.touchLogin(found.id);
-    await this.audit.record({
-      userId: found.id,
-      userEmail: found.email,
-      action: 'auth.login',
-      resource: 'session',
-      resourceId: String(session.id),
-      result: 'SUCCESS',
-      ip: input.ip,
-      details: { client: input.client },
+    // One transaction: a session must never exist without its audit row.
+    await this.transact(async (r) => {
+      const session = await r.sessions.create({
+        userId: found.id,
+        tokenHash: hashToken(token),
+        kind,
+        csrfSecret: csrfToken,
+        expiresAt,
+      });
+      await r.users.touchLogin(found.id);
+      await this.audit.record(
+        {
+          userId: found.id,
+          userEmail: found.email,
+          action: 'auth.login',
+          resource: 'session',
+          resourceId: String(session.id),
+          result: 'SUCCESS',
+          ip: input.ip,
+          details: { client: input.client },
+        },
+        r.audit,
+      );
     });
 
     const { passwordHash: _omit, ...user } = found;
@@ -82,15 +90,20 @@ export class AuthService {
   }
 
   async logout(ctx: AuthContext, ip: string): Promise<void> {
-    await this.sessions.revoke(ctx.session.id);
-    await this.audit.record({
-      userId: ctx.user.id,
-      userEmail: ctx.user.email,
-      action: 'auth.logout',
-      resource: 'session',
-      resourceId: String(ctx.session.id),
-      result: 'SUCCESS',
-      ip,
+    await this.transact(async (r) => {
+      await r.sessions.revoke(ctx.session.id);
+      await this.audit.record(
+        {
+          userId: ctx.user.id,
+          userEmail: ctx.user.email,
+          action: 'auth.logout',
+          resource: 'session',
+          resourceId: String(ctx.session.id),
+          result: 'SUCCESS',
+          ip,
+        },
+        r.audit,
+      );
     });
   }
 }

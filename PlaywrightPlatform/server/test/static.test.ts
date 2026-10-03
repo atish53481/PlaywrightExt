@@ -7,13 +7,20 @@ import { buildApp } from '../src/app';
 import { createDb, type Db } from '../src/db';
 import { testConfig } from './helpers';
 
+const SENTINEL = 'TOP-SECRET-SENTINEL-outside-web-root';
+
 describe('serving the built web app', () => {
+  let base: string;
   let webRoot: string;
   let app: FastifyInstance;
   let db: Db;
 
   beforeAll(async () => {
-    webRoot = mkdtempSync(path.join(os.tmpdir(), 'pw-web-'));
+    // A file beside (not inside) the web root. No request may ever return it.
+    base = mkdtempSync(path.join(os.tmpdir(), 'pw-web-'));
+    writeFileSync(path.join(base, 'secret.txt'), SENTINEL);
+    webRoot = path.join(base, 'web');
+    mkdirSync(webRoot);
     writeFileSync(path.join(webRoot, 'index.html'), '<!doctype html><title>Platform</title>');
     mkdirSync(path.join(webRoot, 'assets'));
     writeFileSync(path.join(webRoot, 'assets', 'app.js'), 'console.log("app")');
@@ -25,7 +32,7 @@ describe('serving the built web app', () => {
   afterAll(async () => {
     await app.close();
     await db.destroy();
-    rmSync(webRoot, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
   });
 
   it('serves index.html at the root and real asset files', async () => {
@@ -55,8 +62,16 @@ describe('serving the built web app', () => {
     expect(post.json().error.code).toBe('NOT_FOUND');
   });
 
-  it('does not serve files outside the web root', async () => {
-    const res = await app.inject({ method: 'GET', url: '/../package.json' });
-    expect(res.body).not.toContain('"name"');
+  it.each([
+    '/../secret.txt',
+    '/..%2fsecret.txt',
+    '/%2e%2e/secret.txt',
+    '/%2e%2e%2fsecret.txt',
+    '/..%5csecret.txt',
+    '/assets/../../secret.txt',
+    '/assets/..%2f..%2fsecret.txt',
+  ])('never returns a file from outside the web root (%s)', async (url) => {
+    const res = await app.inject({ method: 'GET', url });
+    expect(res.body).not.toContain(SENTINEL);
   });
 });

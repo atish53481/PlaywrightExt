@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { roleSchema, userDto, userStatusSchema } from './common';
+import { cleanText, roleSchema, userDto, userStatusSchema } from './common';
 
-const displayName = z.string().trim().min(1, 'Display name is required.').max(120);
+const displayName = cleanText(z.string().trim().min(1, 'Display name is required.').max(120));
 const password = z.string().min(8, 'Password must be at least 8 characters.').max(200);
 
 export const createUserBody = z.object({

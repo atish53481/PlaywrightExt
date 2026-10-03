@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import type { Project, ProjectListItem, ProjectOverview } from '../types';
+import { cleanText } from './common';
 
-const name = z.string().trim().min(1, 'Project name is required.').max(120, 'Project name is too long (120 max).');
-const description = z.string().trim().max(2000, 'Description is too long (2000 max).');
+const name = cleanText(
+  z.string().trim().min(1, 'Project name is required.').max(120, 'Project name is too long (120 max).'),
+);
+const description = cleanText(z.string().trim().max(2000, 'Description is too long (2000 max).'));
 const status = z.enum(['ACTIVE', 'ARCHIVED', 'DELETED']);
 
 export const createProjectBody = z.object({ name, description: description.default('') });
@@ -18,9 +21,9 @@ export const updateProjectBody = z
   });
 
 export const listProjectsQuery = z.object({
-  search: z.string().trim().max(200).optional(),
+  search: cleanText(z.string().trim().max(200)).optional(),
   status: status.default('ACTIVE'),
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(100_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
 

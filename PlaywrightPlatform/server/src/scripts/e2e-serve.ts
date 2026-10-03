@@ -1,7 +1,7 @@
 import { buildApp } from '../app';
 import { loadConfig, loadEnvFile } from '../config';
 import { createDb } from '../db';
-import { migrateLatest, rollbackAll } from '../migrate';
+import { assertDisposableDatabase, migrateLatest, rollbackAll } from '../migrate';
 import { UserRepository } from '../repositories/user-repository';
 import { hashPassword } from '../security/passwords';
 import type { Role } from '../types';
@@ -26,6 +26,7 @@ async function main(): Promise<void> {
     NODE_ENV: 'test',
     LOGIN_RATE_LIMIT_MAX: '1000',
   });
+  assertDisposableDatabase(config.databaseUrl);
   const db = createDb(config.databaseUrl);
   await rollbackAll(db);
   await migrateLatest(db);

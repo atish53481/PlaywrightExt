@@ -7,13 +7,28 @@ export function loadEnvFile(): void {
   dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 }
 
+// An IPv4/IPv6 address with an optional /prefix, or one of proxy-addr's named ranges.
+// A bare hop count is rejected: it cannot verify who the immediate peer is.
+const PROXY_ENTRY = /^(loopback|linklocal|uniquelocal|(?=.*[.:])[0-9a-fA-F.:]+(\/\d{1,3})?)$/;
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, 'must not be empty'),
   APP_HOST: z.string().min(1).default('127.0.0.1'),
   APP_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
-  CORS_ORIGINS: z.string().default(''),
+  CORS_ORIGINS: z
+    .string()
+    .default('')
+    .refine((v) => !v.split(',').some((origin) => origin.trim() === '*'), 'must list explicit origins; "*" is not allowed'),
+  TRUST_PROXY: z
+    .string()
+    .default('false')
+    .refine(
+      (v) => v === 'false' || v.split(',').every((entry) => PROXY_ENTRY.test(entry.trim())),
+      'must be false, or a comma-separated list of proxy addresses/CIDR ranges (or loopback, linklocal, uniquelocal)',
+    ),
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   SECRETS_ENCRYPTION_KEY: z
     .string()
     .refine((v) => Buffer.from(v, 'base64').length === 32, 'must be 32 bytes, base64-encoded'),
@@ -29,6 +44,10 @@ export interface Config {
   corsOrigins: string[];
   secretsKey: Buffer;
   loginRateLimitMax: number;
+  /** Requests per minute per caller (session, or address when anonymous). */
+  rateLimitMax: number;
+  /** false: use the socket address. Otherwise the proxy addresses whose X-Forwarded-For is believed. */
+  trustProxy: false | string;
 }
 
 export class ConfigError extends Error {
@@ -53,5 +72,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     corsOrigins: e.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean),
     secretsKey: Buffer.from(e.SECRETS_ENCRYPTION_KEY, 'base64'),
     loginRateLimitMax: e.LOGIN_RATE_LIMIT_MAX,
+    rateLimitMax: e.RATE_LIMIT_MAX,
+    trustProxy:
+      e.TRUST_PROXY === 'false'
+        ? false
+        : e.TRUST_PROXY.split(',')
+            .map((entry) => entry.trim())
+            .join(','),
   };
 }
