@@ -35,3 +35,42 @@ export interface ProjectOverview {
   notExecuted: number;
   lastExecutionAt: string | null;
 }
+
+export type ScriptLanguage = 'TypeScript' | 'JavaScript';
+export type ScriptType = 'E2E' | 'API' | 'COMPONENT';
+export type ScriptSource = 'MANUAL' | 'GENERATED' | 'RECORDED' | 'IMPORTED' | 'HEALED' | 'RESTORED';
+
+export interface ScriptListItem {
+  id: number;
+  projectId: number;
+  name: string;
+  description: string;
+  language: ScriptLanguage;
+  framework: string;
+  scriptType: ScriptType;
+  version: number;
+  status: 'ACTIVE' | 'ARCHIVED' | 'DELETED';
+  lifecycleState: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string | null;
+}
+
+export interface Script extends ScriptListItem {
+  testScenario: string;
+  content: string;
+}
+
+export interface ScriptVersionItem {
+  version: number;
+  source: ScriptSource;
+  changeSummary: string;
+  createdBy: string | null;
+  createdAt: string;
+  size: number;
+}
+
+export interface ScriptVersion extends ScriptVersionItem {
+  content: string;
+}

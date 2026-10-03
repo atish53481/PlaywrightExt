@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { errorMessage } from '../api/client';
 import { projectsApi } from '../api/projects';
@@ -7,6 +7,7 @@ import { useAuth } from '../auth/AuthContext';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
+import { useDebounced } from '../hooks/useDebounced';
 import { useLoad } from '../hooks/useLoad';
 
 type Dialog =
@@ -14,15 +15,6 @@ type Dialog =
   | { kind: 'edit'; project: ProjectListItem }
   | { kind: 'archive'; project: ProjectListItem }
   | { kind: 'delete'; project: ProjectListItem };
-
-function useDebounced<T>(value: T, ms: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), ms);
-    return () => clearTimeout(timer);
-  }, [value, ms]);
-  return debounced;
-}
 
 export function ProjectsPage() {
   const { user } = useAuth();

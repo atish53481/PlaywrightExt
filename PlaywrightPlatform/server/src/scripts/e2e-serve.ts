@@ -9,6 +9,7 @@ import type { Role } from '../types';
 // Fixed accounts for browser tests. They exist only in playwright_db_test.
 const E2E_USERS: { email: string; displayName: string; password: string; role: Role }[] = [
   { email: 'admin@e2e.test', displayName: 'E2E Admin', password: 'Admin-e2e-pass1', role: 'ADMIN' },
+  { email: 'user@e2e.test', displayName: 'E2E User', password: 'User-e2e-pass1', role: 'USER' },
   { email: 'viewer@e2e.test', displayName: 'E2E Viewer', password: 'Viewer-e2e-pass1', role: 'VIEWER' },
 ];
 
@@ -25,6 +26,7 @@ async function main(): Promise<void> {
     APP_PORT: '3100',
     NODE_ENV: 'test',
     LOGIN_RATE_LIMIT_MAX: '1000',
+    RATE_LIMIT_MAX: '100000',
   });
   assertDisposableDatabase(config.databaseUrl);
   const db = createDb(config.databaseUrl);

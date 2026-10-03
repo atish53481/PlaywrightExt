@@ -76,3 +76,11 @@ textarea { min-height: 80px; resize: vertical; }
 .login-card h1 { margin-bottom: 8px; }
 .login-card label { color: var(--text2); font-size: 12px; }
 .login-card .btn { margin-top: 10px; }
+
+a.btn { display: inline-block; text-decoration: none; }
+a.btn:hover { text-decoration: none; }
+.table-scroll { overflow-x: auto; }
+.chip { display: inline-block; background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; font: inherit; font-size: 11px; margin: 0 4px 2px 0; }
+button.chip { cursor: pointer; }
+button.chip:hover { border-color: var(--accent); color: var(--accent); }
+.pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; }
