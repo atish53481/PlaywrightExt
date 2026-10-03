@@ -7,6 +7,7 @@ import { BridgeProvider } from './providers/bridge-provider.js';
 import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
 import { PlatformClient } from './utils/platform-client.js';
+import { extractCode, looksLikeCode, sectionAfter } from './utils/code-extract.js';
 import { PlaywrightCodegen } from './utils/playwright-codegen.js';
 import { TestRunner } from './utils/test-runner.js';
 
@@ -40,6 +41,7 @@ async function init() {
   setupOrchestrator();
   setupSettings();
   setupPlatform();
+  setupSaveToProject();
   listenForContentMessages();
 }
 
@@ -871,6 +873,133 @@ function setupPlatform() {
   signOutBtn.addEventListener('click', async () => {
     await PlatformClient.logout();
     render(null);
+  });
+}
+
+// "Save to Project": sends the code shown in a panel to the Playwright Platform as a new script.
+// It needs the Settings → Platform sign-in; without one the buttons only say so, and every
+// other feature of the extension works as before.
+function setupSaveToProject() {
+  const overlay = document.getElementById('save-project-overlay');
+  const projectSelect = document.getElementById('save-project-select');
+  const nameInput = document.getElementById('save-project-name');
+  const descriptionInput = document.getElementById('save-project-description');
+  const status = document.getElementById('save-project-status');
+  const confirmBtn = document.getElementById('save-project-confirm');
+  const cancelBtn = document.getElementById('save-project-cancel');
+  if (!overlay || !projectSelect || !nameInput || !descriptionInput || !status || !confirmBtn || !cancelBtn) return;
+
+  const LANGUAGES = { typescript: 'TypeScript', javascript: 'JavaScript' };
+  const EXPIRED = 'Platform session expired — sign in again under Settings → Platform.';
+  let pending = null;      // { content, source, language } while the dialog is open
+  let lastProjectId = '';  // offered again for the next save in this session
+
+  // A panel shows a placeholder or a spinner until it has output; neither is code.
+  const outputText = (el) => (el && !el.querySelector('.output-placeholder, .loader') ? el.textContent || '' : '');
+
+  const close = () => {
+    overlay.style.display = 'none';
+    pending = null;
+  };
+
+  async function open({ read, emptyMessage, languageSelectId, source, suggestName }) {
+    const text = read();
+    if (!looksLikeCode(text)) { showToast(emptyMessage); return; }
+    const language = LANGUAGES[document.getElementById(languageSelectId)?.value || 'typescript'];
+    if (!language) { showToast('Save to Project supports TypeScript and JavaScript only'); return; }
+
+    const platform = await Storage.getPlatform();
+    if (!platform.url || !platform.token) { showToast('Sign in under Settings → Platform first.'); return; }
+
+    let projects;
+    try {
+      projects = await PlatformClient.listProjects();
+    } catch (err) {
+      showToast(err.status === 401 ? EXPIRED : err.message);
+      return;
+    }
+    if (projects.length === 0) { showToast('No projects yet — create one in the platform first.'); return; }
+
+    // Built with DOM methods: project names come from the server and must never be parsed as HTML.
+    projectSelect.replaceChildren(...projects.map((project) => {
+      const option = document.createElement('option');
+      option.value = String(project.id);
+      option.textContent = project.name;
+      return option;
+    }));
+    if (projects.some((project) => String(project.id) === lastProjectId)) projectSelect.value = lastProjectId;
+
+    pending = { content: extractCode(text), source, language };
+    nameInput.value = suggestName();
+    descriptionInput.value = '';
+    status.textContent = '';
+    overlay.style.display = 'flex';
+    nameInput.focus();
+    nameInput.select();
+  }
+
+  document.getElementById('gen-save-project')?.addEventListener('click', () => open({
+    read: () => outputText(document.getElementById('gen-output')),
+    emptyMessage: 'Generate code first',
+    languageSelectId: 'gen-language',
+    source: 'GENERATED',
+    suggestName: () => 'Generated Test',
+  }));
+
+  document.getElementById('rec-save-project')?.addEventListener('click', () => open({
+    // While the Recorder's editor is open, the code lives in its textarea, not in the output element.
+    read: () => document.getElementById('rec-edit-area')?.value ?? outputText(document.getElementById('rec-output')),
+    emptyMessage: 'Record some actions first',
+    languageSelectId: 'rec-language',
+    source: 'RECORDED',
+    suggestName: () => document.getElementById('rec-test-name')?.value?.trim() || 'Recorded Test',
+  }));
+
+  document.getElementById('orch-save-project')?.addEventListener('click', () => open({
+    // The Orchestrator shows the test plan first; only the part after this heading is code.
+    read: () => sectionAfter(outputText(document.getElementById('orch-output')), '## GENERATED CODE'),
+    emptyMessage: 'Run the pipeline first',
+    languageSelectId: 'orch-language',
+    source: 'GENERATED',
+    suggestName: () => 'Generated Test',
+  }));
+
+  confirmBtn.addEventListener('click', async () => {
+    if (!pending) return;
+    const name = nameInput.value.trim();
+    if (!name) {
+      status.textContent = 'Enter a script name.';
+      nameInput.focus();
+      return;
+    }
+    confirmBtn.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      const script = await PlatformClient.saveScript(Number(projectSelect.value), {
+        name,
+        description: descriptionInput.value.trim(),
+        content: pending.content,
+        source: pending.source,
+        language: pending.language,
+      });
+      lastProjectId = projectSelect.value;
+      close();
+      showToast(`Saved "${script.name}" to the project`);
+    } catch (err) {
+      // textContent only: the message comes from the server. The dialog stays open so the
+      // name can be changed and the save tried again.
+      status.textContent = `❌ ${err.status === 401 ? EXPIRED : err.message}`;
+    } finally {
+      confirmBtn.disabled = false;
+    }
+  });
+
+  cancelBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) close();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && overlay.style.display !== 'none') close();
   });
 }
 

@@ -111,4 +111,76 @@ describe('platform client', () => {
   it('listProjects requires a sign-in', async () => {
     await assert.rejects(client.listProjects(), /Sign in to the platform first/);
   });
+
+  const SCRIPT = {
+    name: 'Login Test',
+    description: 'Signs in',
+    content: "test('a', async () => {});",
+    source: 'RECORDED',
+    language: 'TypeScript',
+  };
+
+  it('saveScript posts the script with the bearer token and returns the created script', async () => {
+    saved = { url: 'http://localhost:3000', token: 'tok-123', user: USER };
+    responder = () => json(201, { script: { id: 9, name: 'Login Test', version: 1 } });
+
+    const script = await client.saveScript(7, SCRIPT);
+
+    assert.deepEqual(script, { id: 9, name: 'Login Test', version: 1 });
+    assert.equal(calls[0].url, 'http://localhost:3000/api/projects/7/scripts');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer tok-123');
+    assert.deepEqual(JSON.parse(calls[0].init.body), SCRIPT);
+  });
+
+  it('saveScript sends an empty description when none is given', async () => {
+    saved = { url: 'http://localhost:3000', token: 'tok-123', user: USER };
+    responder = () => json(201, { script: { id: 9 } });
+    const { description, ...withoutDescription } = SCRIPT;
+    await client.saveScript(7, withoutDescription);
+    assert.equal(JSON.parse(calls[0].init.body).description, '');
+  });
+
+  it('saveScript surfaces the server message and status when the name is taken', async () => {
+    saved = { url: 'http://localhost:3000', token: 'tok-123', user: USER };
+    responder = () =>
+      json(409, {
+        error: {
+          code: 'SCRIPT_NAME_TAKEN',
+          message: 'A script named "Login Test" already exists in this project.',
+          details: null,
+        },
+      });
+    await assert.rejects(client.saveScript(7, SCRIPT), (err) => {
+      assert.equal(err.status, 409);
+      assert.match(err.message, /already exists in this project/);
+      return true;
+    });
+  });
+
+  it('saveScript shows the specific validation problem, not the generic message', async () => {
+    saved = { url: 'http://localhost:3000', token: 'tok-123', user: USER };
+    responder = () =>
+      json(400, {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Request validation failed.',
+          details: [{ path: 'content', message: 'Script content is too long (1,000,000 characters max).' }],
+        },
+      });
+    await assert.rejects(client.saveScript(7, SCRIPT), /Script content is too long/);
+  });
+
+  it('saveScript requires a sign-in and sends nothing without one', async () => {
+    await assert.rejects(client.saveScript(7, SCRIPT), /Sign in to the platform first/);
+    assert.equal(calls.length, 0);
+  });
+
+  it('saveScript refuses a project id that is not a positive whole number', async () => {
+    saved = { url: 'http://localhost:3000', token: 'tok-123', user: USER };
+    for (const projectId of ['7/../../users', 0, -1, 1.5, NaN, undefined]) {
+      await assert.rejects(client.saveScript(projectId, SCRIPT), /Choose a project/);
+    }
+    assert.equal(calls.length, 0);
+  });
 });

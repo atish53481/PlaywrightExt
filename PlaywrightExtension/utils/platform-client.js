@@ -32,7 +32,10 @@ export function createPlatformClient({ fetchFn, storage }) {
     if (res.status === 204) return { status: 204, data: null };
     const data = await res.json().catch(() => null);
     if (!res.ok) {
-      const err = new Error(data?.error?.message || `Platform request failed (${res.status})`);
+      // A validation error lists its specific problems in `details`; the first one is more
+      // useful than the generic message.
+      const detail = Array.isArray(data?.error?.details) ? data.error.details[0]?.message : null;
+      const err = new Error(detail || data?.error?.message || `Platform request failed (${res.status})`);
       err.status = res.status;
       throw err;
     }
@@ -88,6 +91,20 @@ export function createPlatformClient({ fetchFn, storage }) {
       const platform = await signedIn();
       const { data } = await request(platform.url, '/projects?pageSize=100', { token: platform.token });
       return data.items;
+    },
+
+    // Creates a script, with its first version, in a project. `source` is GENERATED or RECORDED;
+    // `language` is TypeScript or JavaScript.
+    async saveScript(projectId, { name, description = '', content, source, language }) {
+      // The id goes into the URL path, so anything but a positive whole number is refused.
+      if (!Number.isInteger(projectId) || projectId <= 0) throw new Error('Choose a project.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/projects/${projectId}/scripts`, {
+        method: 'POST',
+        token: platform.token,
+        body: { name, description, content, source, language },
+      });
+      return data.script;
     },
   };
 }

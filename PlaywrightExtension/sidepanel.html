@@ -140,7 +140,7 @@
           </div>
           <div class="output-section">
             <div class="output-header"><span>Generated Code</span>
-              <div class="output-header-btns"><button class="btn btn-icon" id="gen-copy">📋 Copy</button></div>
+              <div class="output-header-btns"><button class="btn btn-icon" id="gen-copy">📋 Copy</button><button class="btn btn-icon" id="gen-save-project">💾 Save to Project</button></div>
             </div>
             <div class="output-content" id="gen-output"><span class="output-placeholder">Playwright code will appear here...</span></div>
           </div>
@@ -239,6 +239,7 @@
               <div class="output-header-btns">
                 <button class="btn btn-icon" id="rec-edit">✏️ Edit</button>
                 <button class="btn btn-icon" id="rec-copy">📋 Copy</button>
+                <button class="btn btn-icon" id="rec-save-project">💾 Save to Project</button>
               </div>
             </div>
             <div class="output-content" id="rec-output"><span class="output-placeholder">Recording will generate code here in real time...</span></div>
@@ -495,7 +496,7 @@
           </div>
           <div class="output-section">
             <div class="output-header"><span>Pipeline Results</span>
-              <div class="output-header-btns"><button class="btn btn-icon" id="orch-copy">📋 Copy All</button></div>
+              <div class="output-header-btns"><button class="btn btn-icon" id="orch-copy">📋 Copy All</button><button class="btn btn-icon" id="orch-save-project">💾 Save to Project</button></div>
             </div>
             <div class="output-content" id="orch-output"><span class="output-placeholder">Run the pipeline to see combined results...</span></div>
           </div>
@@ -570,6 +571,28 @@
 
     </div><!-- /panels -->
   </main>
+</div>
+<div id="save-project-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;padding:12px">
+  <div class="settings-section" role="dialog" aria-modal="true" aria-labelledby="save-project-title" style="width:100%;max-width:360px">
+    <h3 id="save-project-title">Save to Project</h3>
+    <div class="form-group">
+      <label for="save-project-select">Project</label>
+      <select id="save-project-select"></select>
+    </div>
+    <div class="form-group" style="margin-top:8px">
+      <label for="save-project-name">Script Name</label>
+      <input type="text" id="save-project-name" maxlength="200">
+    </div>
+    <div class="form-group" style="margin-top:8px">
+      <label for="save-project-description">Description (optional)</label>
+      <textarea id="save-project-description" maxlength="2000" style="min-height:48px"></textarea>
+    </div>
+    <div id="save-project-status" role="status" style="font-size:12px;color:var(--text2);padding:6px 0 0;min-height:20px"></div>
+    <div class="btn-row" style="margin-top:8px;justify-content:flex-end">
+      <button class="btn btn-secondary" id="save-project-cancel">Cancel</button>
+      <button class="btn btn-primary" id="save-project-confirm">Save</button>
+    </div>
+  </div>
 </div>
 <script type="module" src="sidepanel.js"></script>
 </body>
