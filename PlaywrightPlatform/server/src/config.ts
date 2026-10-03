@@ -33,6 +33,11 @@ const envSchema = z.object({
     .string()
     .refine((v) => Buffer.from(v, 'base64').length === 32, 'must be 32 bytes, base64-encoded'),
   LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  // The address Jenkins uses to reach this server. Empty means loopback on APP_PORT.
+  PLATFORM_PUBLIC_URL: z
+    .string()
+    .default('')
+    .refine((v) => v === '' || /^https?:\/\/[^\s]+$/i.test(v), 'must be an http or https URL'),
 });
 
 export interface Config {
@@ -48,6 +53,8 @@ export interface Config {
   rateLimitMax: number;
   /** false: use the socket address. Otherwise the proxy addresses whose X-Forwarded-For is believed. */
   trustProxy: false | string;
+  /** Base URL that Jenkins builds use to call back, without a trailing slash. */
+  publicUrl: string;
 }
 
 export class ConfigError extends Error {
@@ -79,5 +86,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
         : e.TRUST_PROXY.split(',')
             .map((entry) => entry.trim())
             .join(','),
+    publicUrl: e.PLATFORM_PUBLIC_URL.replace(/\/+$/, '') || `http://127.0.0.1:${e.APP_PORT}`,
   };
 }
