@@ -85,3 +85,10 @@ export async function apiSaveContent(
 export function scriptRow(page: Page, name: string): Locator {
   return page.getByRole('row').filter({ has: page.getByRole('link', { name, exact: true }) });
 }
+
+/** Replaces the whole text of the script editor, the way select-all followed by a paste does. */
+export async function setEditorText(page: Page, text: string): Promise<void> {
+  await page.getByRole('textbox', { name: 'Script content' }).click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.insertText(text);
+}
