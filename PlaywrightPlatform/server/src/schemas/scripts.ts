@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Script, ScriptSummary } from '../types';
 import { cleanText } from './common';
+import type { ScriptVersion, ScriptVersionSummary } from '../types';
 
 const MAX_TAGS = 20;
 
@@ -158,3 +159,36 @@ export const updateScriptBody = z
     message: 'baseVersion is required when content is sent.',
     path: ['baseVersion'],
   });
+
+export const scriptVersionParams = z.object({ id, version: versionNumber });
+export const duplicateScriptBody = z.object({ name: name.optional() });
+export const downloadQuery = z.object({ version: versionNumber.optional() });
+
+const versionItemDto = z.object({
+  version: z.number(),
+  source: z.enum(['MANUAL', 'GENERATED', 'RECORDED', 'IMPORTED', 'HEALED', 'RESTORED']),
+  changeSummary: z.string(),
+  createdBy: z.string().nullable(),
+  createdAt: z.string(),
+  size: z.number(),
+});
+
+const versionDto = versionItemDto.extend({ content: z.string() });
+
+export const versionListResponse = z.object({ items: z.array(versionItemDto) });
+export const versionResponse = z.object({ version: versionDto });
+
+export function toVersionItemDto(v: ScriptVersionSummary): z.infer<typeof versionItemDto> {
+  return {
+    version: v.version,
+    source: v.source,
+    changeSummary: v.changeSummary,
+    createdBy: v.createdBy,
+    createdAt: v.createdAt.toISOString(),
+    size: v.size,
+  };
+}
+
+export function toVersionDto(v: ScriptVersion): z.infer<typeof versionDto> {
+  return { ...toVersionItemDto(v), content: v.content };
+}

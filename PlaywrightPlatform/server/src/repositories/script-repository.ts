@@ -8,7 +8,9 @@ import type {
   ScriptStatus,
   ScriptSummary,
   ScriptType,
+  ScriptVersion,
   ScriptVersionSource,
+  ScriptVersionSummary,
 } from '../types';
 import { escapeLike } from './sql';
 
@@ -35,6 +37,15 @@ interface ScriptRow extends SummaryRow {
   script_content: string;
 }
 
+interface VersionRow {
+  version: number;
+  source: ScriptVersionSource;
+  change_summary: string;
+  created_by_name: string | null;
+  created_at: Date;
+  size: number;
+}
+
 const SUMMARY_COLUMNS = [
   's.id',
   's.project_id',
@@ -55,6 +66,17 @@ const SUMMARY_COLUMNS = [
 // Tag names in a fixed order. A subquery, not a join, keeps one row per script so paging stays correct.
 const TAGS_COLUMN = `(select coalesce(array_agg(t.name order by lower(t.name) collate "C"), '{}')
   from script_tags st join tags t on t.id = st.tag_id where st.script_id = s.id) as tags`;
+
+const VERSION_COLUMNS = [
+  'v.version',
+  'v.source',
+  'v.change_summary',
+  'v.created_at',
+  'u.display_name as created_by_name',
+];
+
+// Measured in the database, so listing versions never loads their content.
+const SIZE_COLUMN = 'char_length(v.script_content) as size';
 
 function toSummary(row: SummaryRow): ScriptSummary {
   return {
@@ -78,6 +100,17 @@ function toSummary(row: SummaryRow): ScriptSummary {
 
 function toScript(row: ScriptRow): Script {
   return { ...toSummary(row), testScenario: row.test_scenario, content: row.script_content };
+}
+
+function toVersionSummary(row: VersionRow): ScriptVersionSummary {
+  return {
+    version: row.version,
+    source: row.source,
+    changeSummary: row.change_summary,
+    createdBy: row.created_by_name,
+    createdAt: row.created_at,
+    size: row.size,
+  };
 }
 
 /** True when a write failed because another live script in the project already has that name. */
@@ -239,5 +272,28 @@ export class ScriptRepository {
         updated_at: this.db.fn.now(),
       });
     return count > 0;
+  }
+
+  /** A script's versions joined to their authors. */
+  private versions(scriptId: number): Knex.QueryBuilder {
+    return this.db('test_script_versions as v')
+      .leftJoin('users as u', 'u.id', 'v.created_by')
+      .where('v.script_id', scriptId);
+  }
+
+  /** Newest first, without content. */
+  async listVersions(scriptId: number): Promise<ScriptVersionSummary[]> {
+    const rows: VersionRow[] = await this.versions(scriptId)
+      .select(...VERSION_COLUMNS, this.db.raw(SIZE_COLUMN))
+      .orderBy('v.version', 'desc');
+    return rows.map(toVersionSummary);
+  }
+
+  async findVersion(scriptId: number, version: number): Promise<ScriptVersion | null> {
+    const row: (VersionRow & { script_content: string }) | undefined = await this.versions(scriptId)
+      .where('v.version', version)
+      .select(...VERSION_COLUMNS, 'v.script_content', this.db.raw(SIZE_COLUMN))
+      .first();
+    return row ? { ...toVersionSummary(row), content: row.script_content } : null;
   }
 }

@@ -5,7 +5,15 @@ import type { AuditRepository } from '../repositories/audit-repository';
 import type { ProjectRepository } from '../repositories/project-repository';
 import { isScriptNameClash, type ScriptListQuery, type ScriptRepository } from '../repositories/script-repository';
 import type { TagRepository } from '../repositories/tag-repository';
-import type { Actor, Script, ScriptLanguage, ScriptSummary, ScriptType } from '../types';
+import type {
+  Actor,
+  Script,
+  ScriptLanguage,
+  ScriptSummary,
+  ScriptType,
+  ScriptVersion,
+  ScriptVersionSummary,
+} from '../types';
 import type { AuditService } from './audit-service';
 
 export interface CreateScriptInput {
@@ -32,6 +40,25 @@ export interface UpdateScriptInput {
 }
 
 const METADATA_FIELDS = ['name', 'description', 'testScenario', 'tags'] as const;
+
+const COPY_SUFFIX = ' (copy)';
+const MAX_NAME_LENGTH = 200;
+
+/**
+ * "Login Test" in TypeScript becomes "login-test.spec.ts". Only a-z, 0-9, and hyphens
+ * survive, so the result is always safe inside a Content-Disposition header.
+ */
+function downloadFileName(name: string, language: ScriptLanguage): string {
+  const base = name
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '') // the accents NFKD split off their letters
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase()
+    .slice(0, 80)
+    .replace(/-+$/, '');
+  return `${base || 'script'}.spec.${language === 'JavaScript' ? 'js' : 'ts'}`;
+}
 
 function projectNotActive(): AppError {
   return new AppError(409, 'PROJECT_NOT_ACTIVE', 'This project is archived. Restore it to change its scripts.');
@@ -192,6 +219,105 @@ export class ScriptService {
       await this.record(actor, 'script.delete', id, { name: script.name, version: script.version }, r.audit);
     });
     this.log.info(`[SCRIPT] Deleted script ${id}`);
+  }
+
+  async versions(id: number): Promise<ScriptVersionSummary[]> {
+    await this.get(id);
+    return this.scripts.listVersions(id);
+  }
+
+  async version(id: number, version: number): Promise<ScriptVersion> {
+    await this.get(id);
+    const row = await this.scripts.findVersion(id, version);
+    if (!row) throw notFound('Version');
+    return row;
+  }
+
+  /** History is never rewritten: restoring writes the old content as a new version. */
+  async restore(actor: Actor, id: number, version: number): Promise<Script> {
+    const script = await this.transact(async (r) => {
+      if (!(await r.scripts.lock(id))) throw notFound('Script');
+      const current = await r.scripts.findLive(id);
+      if (!current) throw notFound('Script'); // its project is deleted
+      if (current.projectStatus !== 'ACTIVE') throw projectNotActive();
+      if (version === current.version) {
+        throw new AppError(409, 'ALREADY_CURRENT', `v${version} is already the latest version.`);
+      }
+      const old = await r.scripts.findVersion(id, version);
+      if (!old) throw notFound('Version');
+
+      const next = current.version + 1;
+      await r.scripts.update(id, { newVersion: { content: old.content, version: next } }, actor.userId);
+      await r.scripts.insertVersion({
+        scriptId: id,
+        version: next,
+        content: old.content,
+        changeSummary: `Restored from v${version}`,
+        source: 'RESTORED',
+        createdBy: actor.userId,
+      });
+      await this.record(actor, 'script.restore', id, { fromVersion: version, version: next }, r.audit);
+      return found(await r.scripts.findLive(id));
+    });
+    this.log.info(`[SCRIPT] Restored script ${id} from v${version} as v${script.version}`);
+    return script;
+  }
+
+  /** A new script in the same project with the latest content and its own history. */
+  async duplicate(actor: Actor, id: number, name?: string): Promise<Script> {
+    let copyName = name ?? '';
+    let copy: Script;
+    try {
+      copy = await this.transact(async (r) => {
+        const source = await r.scripts.findLive(id);
+        if (!source) throw notFound('Script');
+        if (source.projectStatus !== 'ACTIVE') throw projectNotActive();
+        copyName = name ?? `${source.name.slice(0, MAX_NAME_LENGTH - COPY_SUFFIX.length)}${COPY_SUFFIX}`;
+
+        const copyId = await r.scripts.create({
+          projectId: source.projectId,
+          name: copyName,
+          description: source.description,
+          testScenario: source.testScenario,
+          content: source.content,
+          language: source.language,
+          scriptType: source.scriptType,
+          createdBy: actor.userId,
+        });
+        await r.scripts.insertVersion({
+          scriptId: copyId,
+          version: 1,
+          content: source.content,
+          changeSummary: `Duplicated from ${source.name} v${source.version}`,
+          source: 'MANUAL',
+          createdBy: actor.userId,
+        });
+        await r.tags.setForScript(copyId, source.tags);
+        await this.record(
+          actor,
+          'script.duplicate',
+          copyId,
+          { fromScriptId: id, fromVersion: source.version, name: copyName },
+          r.audit,
+        );
+        return found(await r.scripts.findLive(copyId));
+      });
+    } catch (err) {
+      if (isScriptNameClash(err)) throw nameTaken(copyName);
+      throw err;
+    }
+    this.log.info(`[SCRIPT] Duplicated script ${id} as script ${copy.id}`);
+    return copy;
+  }
+
+  /** The file to hand to the browser: the latest content, or one version's. */
+  async download(id: number, version?: number): Promise<{ fileName: string; content: string }> {
+    const script = await this.get(id);
+    const fileName = downloadFileName(script.name, script.language);
+    if (version === undefined || version === script.version) return { fileName, content: script.content };
+    const old = await this.scripts.findVersion(id, version);
+    if (!old) throw notFound('Version');
+    return { fileName, content: old.content };
   }
 
   /** Writes the audit row inside the caller's transaction. Never pass script content in `details`. */
