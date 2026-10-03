@@ -1,7 +1,9 @@
 import type { Db } from '../db';
 import { AuditRepository } from './audit-repository';
 import { ProjectRepository } from './project-repository';
+import { ScriptRepository } from './script-repository';
 import { SessionRepository } from './session-repository';
+import { TagRepository } from './tag-repository';
 import { UserRepository } from './user-repository';
 
 export interface Repos {
@@ -9,6 +11,8 @@ export interface Repos {
   sessions: SessionRepository;
   audit: AuditRepository;
   projects: ProjectRepository;
+  scripts: ScriptRepository;
+  tags: TagRepository;
 }
 
 export function createRepos(db: Db): Repos {
@@ -17,6 +21,8 @@ export function createRepos(db: Db): Repos {
     sessions: new SessionRepository(db),
     audit: new AuditRepository(db),
     projects: new ProjectRepository(db),
+    scripts: new ScriptRepository(db),
+    tags: new TagRepository(db),
   };
 }
 

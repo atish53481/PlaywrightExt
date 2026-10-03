@@ -14,6 +14,9 @@ export function registerErrorHandling(app: FastifyInstance, options: { spaFallba
     if (status === 429) {
       return reply.status(429).send(body('RATE_LIMITED', 'Too many requests. Try again later.'));
     }
+    if (status === 413) {
+      return reply.status(413).send(body('PAYLOAD_TOO_LARGE', 'The request is too large.'));
+    }
     if (typeof status === 'number' && status >= 400 && status < 500) {
       const message = err instanceof Error ? err.message : 'Bad request.';
       return reply.status(status).send(body('BAD_REQUEST', message));

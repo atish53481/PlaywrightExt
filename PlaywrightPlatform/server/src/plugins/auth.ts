@@ -67,6 +67,8 @@ function requireRole(...roles: Role[]) {
 export const signedIn = [requireAuth, requireCsrf];
 /** `preHandler` for ADMIN only. */
 export const adminOnly = [requireAuth, requireCsrf, requireRole('ADMIN')];
+/** `preHandler` for the roles that may change scripts: ADMIN and USER. */
+export const writers = [requireAuth, requireCsrf, requireRole('ADMIN', 'USER')];
 
 /** Call only inside a route guarded by `signedIn` or `adminOnly`. */
 export function actorOf(req: FastifyRequest): Actor {
