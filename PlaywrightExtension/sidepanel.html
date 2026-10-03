@@ -22,6 +22,8 @@
       <button class="nav-btn" data-panel="export">📤<span class="tooltip">Export/Import</span></button>
       <button class="nav-btn" data-panel="session">🌐<span class="tooltip">Browser Session</span></button>
       <button class="nav-btn" data-panel="orchestrator">🤖<span class="tooltip">Orchestrator</span></button>
+      <div class="nav-divider"></div>
+      <button class="nav-btn" data-panel="projects">🗂️<span class="tooltip">Projects</span></button>
     </div>
     <div class="nav-bottom">
       <button class="nav-btn" data-panel="settings">⚙️<span class="tooltip">Settings</span></button>
@@ -503,6 +505,66 @@
         </div>
       </div>
 
+      <!-- PROJECTS -->
+      <div class="panel" id="panel-projects">
+        <div class="panel-header">
+          <span class="panel-icon">🗂️</span>
+          <div><h2>Projects</h2><p>Stored scripts — run them on Jenkins</p></div>
+          <span class="badge">Platform</span>
+        </div>
+        <div class="panel-body">
+          <div id="projects-message" class="projects-message" role="status" style="display:none"></div>
+
+          <div class="projects-view" id="projects-view-list" style="display:none">
+            <div class="btn-row"><button class="btn btn-secondary btn-sm" id="projects-refresh">↻ Refresh</button></div>
+            <div class="item-list" id="projects-list"></div>
+          </div>
+
+          <div class="projects-view" id="projects-view-scripts" style="display:none">
+            <div class="btn-row">
+              <button class="btn btn-secondary btn-sm" id="scripts-back">← Projects</button>
+              <span class="crumb" id="scripts-project-name"></span>
+            </div>
+            <div class="form-group">
+              <label for="scripts-search">Search scripts</label>
+              <input type="text" id="scripts-search" maxlength="200" placeholder="Name, description, or tag">
+            </div>
+            <div class="item-list" id="scripts-list"></div>
+          </div>
+
+          <div class="projects-view" id="projects-view-script" style="display:none">
+            <div class="btn-row"><button class="btn btn-secondary btn-sm" id="script-back">← Scripts</button></div>
+            <div class="script-title" id="script-name"></div>
+            <div class="script-meta" id="script-meta"></div>
+            <div class="btn-row">
+              <button class="btn btn-primary" id="script-run" style="display:none">▶ Run on Jenkins</button>
+              <button class="btn btn-danger" id="script-stop" style="display:none">⏹ Stop</button>
+            </div>
+            <div id="script-run-note" class="projects-message" style="display:none"></div>
+            <div class="run-card" id="run-card" style="display:none">
+              <div class="run-card-head">
+                <span id="run-status" class="run-status"></span>
+                <span id="run-title"></span>
+              </div>
+              <div id="run-counts"></div>
+              <div id="run-times"></div>
+              <div id="run-error" class="run-error"></div>
+              <div class="btn-row" id="run-links"></div>
+            </div>
+            <div class="output-section">
+              <div class="output-header"><span>Recent runs</span></div>
+              <div class="item-list" id="run-history"></div>
+            </div>
+            <div class="output-section">
+              <div class="output-header"><span>Script</span>
+                <div class="output-header-btns"><button class="btn btn-icon" id="script-copy">📋 Copy</button></div>
+              </div>
+              <div class="output-content" id="script-code"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- SETTINGS -->
       <div class="panel" id="panel-settings">
         <div class="panel-header">
@@ -557,6 +619,34 @@
               <button class="btn btn-secondary" id="platform-signout" style="display:none">Sign out</button>
             </div>
             <div id="platform-status" style="font-size:12px;color:var(--text2);padding:6px 0 0"></div>
+          </div>
+          <div class="settings-section" id="jenkins-section" style="display:none">
+            <h3>Jenkins</h3>
+            <div id="jenkins-summary" style="font-size:12px;color:var(--text2)"></div>
+            <div id="jenkins-admin" style="display:none">
+              <div class="form-group" style="margin-top:8px">
+                <label for="jenkins-url">Jenkins URL</label>
+                <input type="text" id="jenkins-url" maxlength="300" placeholder="http://localhost:8080">
+              </div>
+              <div class="form-group" style="margin-top:8px">
+                <label for="jenkins-username">Username</label>
+                <input type="text" id="jenkins-username" maxlength="100" autocomplete="off">
+              </div>
+              <div class="form-group" style="margin-top:8px">
+                <label for="jenkins-token">API Token</label>
+                <input type="password" id="jenkins-token" maxlength="200" autocomplete="off">
+              </div>
+              <div class="form-group" style="margin-top:8px">
+                <label for="jenkins-job">Job Name</label>
+                <input type="text" id="jenkins-job" maxlength="100" placeholder="playwright-platform-run">
+              </div>
+              <div class="btn-row" style="margin-top:10px">
+                <button class="btn btn-secondary" id="jenkins-test">🧪 Test Connection</button>
+                <button class="btn btn-primary" id="jenkins-save">💾 Save</button>
+                <button class="btn btn-secondary" id="jenkins-create-job">🛠 Create Job</button>
+              </div>
+              <div id="jenkins-status" role="status" style="font-size:12px;color:var(--text2);padding:6px 0 0"></div>
+            </div>
           </div>
           <div class="settings-section">
             <h3>About Playwright AI Studio v1.0.0</h3>

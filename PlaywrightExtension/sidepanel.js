@@ -7,6 +7,7 @@ import { BridgeProvider } from './providers/bridge-provider.js';
 import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
 import { PlatformClient } from './utils/platform-client.js';
+import { countsText, durationText, isFinal, runControls, runLinks, runSummary, statusView } from './utils/execution-view.js';
 import { extractCode, looksLikeCode, sectionAfter } from './utils/code-extract.js';
 import { PlaywrightCodegen } from './utils/playwright-codegen.js';
 import { TestRunner } from './utils/test-runner.js';
@@ -40,6 +41,8 @@ async function init() {
   setupSession();
   setupOrchestrator();
   setupSettings();
+  setupProjectsPanel();
+  setupJenkinsSettings();
   setupPlatform();
   setupSaveToProject();
   listenForContentMessages();
@@ -840,6 +843,8 @@ function setupPlatform() {
     urlInput.disabled = Boolean(user);
     // textContent only: the values come from a server and must never be parsed as HTML.
     status.textContent = message || (user ? `✅ Signed in as ${user.email} (${user.role})` : 'Not signed in');
+    // The Projects tab and the Jenkins block follow the sign-in state.
+    document.dispatchEvent(new CustomEvent('platform-auth', { detail: { user: user || null } }));
   };
 
   (async () => {
@@ -1001,6 +1006,459 @@ function setupSaveToProject() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && overlay.style.display !== 'none') close();
   });
+}
+
+// Projects tab: browse the platform's projects and scripts, and run a stored script on Jenkins.
+// Every value shown here came from the server, so it is written with textContent and built
+// with DOM methods, never parsed as HTML.
+function setupProjectsPanel() {
+  const $ = (id) => document.getElementById(id);
+  const message = $('projects-message');
+  const views = { list: $('projects-view-list'), scripts: $('projects-view-scripts'), script: $('projects-view-script') };
+  const projectList = $('projects-list');
+  const projectName = $('scripts-project-name');
+  const searchInput = $('scripts-search');
+  const scriptList = $('scripts-list');
+  const scriptName = $('script-name');
+  const scriptMeta = $('script-meta');
+  const scriptCode = $('script-code');
+  const runBtn = $('script-run');
+  const stopBtn = $('script-stop');
+  const runNote = $('script-run-note');
+  const card = $('run-card');
+  const runStatus = $('run-status');
+  const runTitle = $('run-title');
+  const runCounts = $('run-counts');
+  const runTimes = $('run-times');
+  const runError = $('run-error');
+  const runLinksEl = $('run-links');
+  const runHistory = $('run-history');
+  const required = [
+    message, views.list, views.scripts, views.script, projectList, projectName, searchInput, scriptList,
+    scriptName, scriptMeta, scriptCode, runBtn, stopBtn, runNote, card, runStatus, runTitle, runCounts,
+    runTimes, runError, runLinksEl, runHistory,
+  ];
+  if (required.some((el) => !el)) return;
+
+  const POLL_MS = 3000;
+  const SEARCH_DELAY_MS = 300;
+  const EXPIRED = 'Platform session expired — sign in again under Settings → Platform.';
+
+  const state = {
+    user: null,       // the signed-in platform user
+    jenkins: null,    // the Jenkins settings as the server reports them
+    project: null,    // the open project
+    script: null,     // the open script, with its content
+    execution: null,  // the run shown in the status card
+    runs: [],         // the open script's recent runs
+    turn: 0,          // goes up on every navigation, so an answer that arrives late is dropped
+    pollTimer: null,
+    searchTimer: null,
+  };
+
+  const show = (el, visible) => { el.style.display = visible ? '' : 'none'; };
+  const say = (text) => { message.textContent = text; show(message, Boolean(text)); };
+  const fail = (err) => say(err.status === 401 ? EXPIRED : `❌ ${err.message}`);
+  const showView = (name) => {
+    for (const [key, el] of Object.entries(views)) show(el, key === name);
+  };
+  const scriptDetail = (script) =>
+    [`v${script.version}`, script.language, ...script.tags.map((tag) => `#${tag}`)].join(' · ');
+
+  // One row of a list: a title and a line of detail.
+  function item(title, detail, onOpen) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'item';
+    const top = document.createElement('span');
+    top.className = 'item-title';
+    top.textContent = title;
+    const bottom = document.createElement('span');
+    bottom.className = 'item-sub';
+    bottom.textContent = detail;
+    row.append(top, bottom);
+    row.addEventListener('click', onOpen);
+    return row;
+  }
+
+  function emptyLine(text) {
+    const line = document.createElement('div');
+    line.className = 'item-empty';
+    line.textContent = text;
+    return line;
+  }
+
+  function stopPolling() {
+    clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+  }
+
+  // Asks again in 3 seconds while the shown run is unfinished. A chain of timeouts, not an
+  // interval, so a slow answer never overlaps the next request.
+  function keepWatching() {
+    stopPolling();
+    const watched = state.execution;
+    if (!watched || isFinal(watched.status)) return;
+    const turn = state.turn;
+    state.pollTimer = setTimeout(async () => {
+      try {
+        const fresh = await PlatformClient.getExecution(watched.id);
+        if (turn !== state.turn || state.execution?.id !== watched.id) return;
+        say('');
+        renderRun(fresh);
+      } catch (err) {
+        if (turn !== state.turn) return;
+        if (err.status === 401) { fail(err); return; }
+        // One failed poll does not end the watch: the last known state stays on screen.
+        say(`⚠️ ${err.message}`);
+      }
+      keepWatching();
+    }, POLL_MS);
+  }
+
+  function renderControls() {
+    const controls = runControls({
+      role: state.user?.role,
+      projectStatus: state.script?.projectStatus,
+      jenkinsConfigured: Boolean(state.jenkins?.configured),
+      execution: state.execution,
+    });
+    show(runBtn, controls.showRun);
+    runBtn.disabled = controls.runDisabled;
+    show(stopBtn, controls.showStop);
+    runNote.textContent = controls.note;
+    show(runNote, Boolean(controls.note));
+  }
+
+  function renderRuns() {
+    if (state.runs.length === 0) {
+      runHistory.replaceChildren(emptyLine('No runs yet.'));
+      return;
+    }
+    runHistory.replaceChildren(...state.runs.map((execution) => {
+      const row = item(runSummary(execution), new Date(execution.createdAt).toLocaleString(), () => selectRun(execution.id));
+      if (state.execution?.id === execution.id) row.classList.add('selected');
+      return row;
+    }));
+  }
+
+  // Shows a run in the status card, or hides the card when there is none.
+  function renderRun(execution) {
+    state.execution = execution;
+    show(card, Boolean(execution));
+    if (execution) {
+      // The list shows the same run, so it must not lag behind the card.
+      state.runs = state.runs.map((run) => (run.id === execution.id ? execution : run));
+      const status = statusView(execution.status);
+      runStatus.className = status.className;
+      runStatus.textContent = status.label;
+      const build = execution.buildNumber ? ` · build ${execution.buildNumber}` : '';
+      runTitle.textContent = `Run #${execution.id} · v${execution.scriptVersion}${build}`;
+      runCounts.textContent = countsText(execution);
+      const duration = durationText(execution.durationMs);
+      runTimes.textContent = [
+        execution.triggeredBy ? `Started by ${execution.triggeredBy}` : '',
+        duration ? `Took ${duration}` : '',
+      ].filter(Boolean).join(' · ');
+      runError.textContent = execution.errorMessage || '';
+      runLinksEl.replaceChildren(...runLinks(execution, state.jenkins?.baseUrl || '').map(({ label, href }) => {
+        const link = document.createElement('a');
+        link.className = 'btn btn-secondary btn-sm';
+        link.textContent = label;
+        link.href = href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        return link;
+      }));
+    }
+    renderControls();
+    renderRuns();
+  }
+
+  async function loadRuns() {
+    if (!state.script) return;
+    const turn = state.turn;
+    try {
+      const runs = await PlatformClient.listExecutions(state.script.id, 10);
+      if (turn !== state.turn) return;
+      state.runs = runs;
+      renderRuns();
+    } catch (err) {
+      if (turn === state.turn) fail(err);
+    }
+  }
+
+  // Shows one run in the card. Reading it makes the server bring it up to date with Jenkins.
+  async function selectRun(id) {
+    const turn = state.turn;
+    try {
+      const execution = await PlatformClient.getExecution(id);
+      if (turn !== state.turn) return;
+      renderRun(execution);
+      keepWatching();
+    } catch (err) {
+      if (turn === state.turn) fail(err);
+    }
+  }
+
+  async function openList() {
+    const turn = ++state.turn;
+    stopPolling();
+    state.project = null;
+    state.script = null;
+    state.execution = null;
+    if (!state.user) {
+      showView(null);
+      say('Sign in under Settings → Platform to see your projects.');
+      return;
+    }
+    showView('list');
+    say('Loading…');
+    try {
+      const projects = await PlatformClient.listProjects();
+      if (turn !== state.turn) return;
+      say(projects.length === 0 ? 'No projects yet. An administrator creates them in the platform web app.' : '');
+      projectList.replaceChildren(...projects.map((project) => item(
+        project.name,
+        `${project.scriptCount} ${project.scriptCount === 1 ? 'script' : 'scripts'}`,
+        () => openProject(project),
+      )));
+    } catch (err) {
+      if (turn === state.turn) fail(err);
+    }
+  }
+
+  function openProject(project) {
+    state.project = project;
+    projectName.textContent = project.name;
+    searchInput.value = '';
+    loadScripts();
+  }
+
+  async function loadScripts() {
+    if (!state.project) return;
+    const turn = ++state.turn;
+    stopPolling();
+    state.script = null;
+    state.execution = null;
+    showView('scripts');
+    say('Loading…');
+    const search = searchInput.value;
+    try {
+      const scripts = await PlatformClient.listScripts(state.project.id, search);
+      if (turn !== state.turn) return;
+      const none = search.trim()
+        ? 'No scripts match the search.'
+        : 'This project has no scripts yet. Save one from the Generator or Recorder.';
+      say(scripts.length === 0 ? none : '');
+      scriptList.replaceChildren(...scripts.map((script) => item(script.name, scriptDetail(script), () => openScript(script.id))));
+    } catch (err) {
+      if (turn === state.turn) fail(err);
+    }
+  }
+
+  async function openScript(scriptId) {
+    const turn = ++state.turn;
+    stopPolling();
+    clearTimeout(state.searchTimer);
+    state.script = null;
+    state.execution = null;
+    state.runs = [];
+    showView(null);
+    say('Loading…');
+    try {
+      const [script, jenkins, runs] = await Promise.all([
+        PlatformClient.getScript(scriptId),
+        PlatformClient.getJenkinsSettings(),
+        PlatformClient.listExecutions(scriptId, 10),
+      ]);
+      if (turn !== state.turn) return;
+      state.script = script;
+      state.jenkins = jenkins;
+      state.runs = runs;
+      scriptName.textContent = script.name;
+      scriptMeta.textContent = scriptDetail(script);
+      scriptCode.textContent = script.content;
+      say('');
+      showView('script');
+      renderRun(null);
+      // A run that is still going is shown again, so closing the panel never loses it.
+      const unfinished = runs.find((execution) => !isFinal(execution.status));
+      if (unfinished) await selectRun(unfinished.id);
+    } catch (err) {
+      if (turn !== state.turn) return;
+      showView('scripts');
+      fail(err);
+    }
+  }
+
+  runBtn.addEventListener('click', async () => {
+    if (!state.script) return;
+    const turn = state.turn;
+    runBtn.disabled = true;
+    say('Starting the run…');
+    try {
+      const execution = await PlatformClient.runScript(state.script.id);
+      if (turn !== state.turn) return;
+      say('');
+      state.runs = [execution, ...state.runs].slice(0, 10);
+      renderRun(execution);
+      keepWatching();
+    } catch (err) {
+      if (turn !== state.turn) return;
+      fail(err);
+      // A start that failed is kept in history, and a refusal may name the run in progress.
+      await loadRuns();
+      if (turn !== state.turn) return;
+      const inProgress = err.code === 'RUN_IN_PROGRESS' ? err.details?.executionId : null;
+      if (Number.isInteger(inProgress)) await selectRun(inProgress);
+      else renderControls();
+    }
+  });
+
+  stopBtn.addEventListener('click', async () => {
+    const watched = state.execution;
+    if (!watched) return;
+    const turn = state.turn;
+    stopBtn.disabled = true;
+    try {
+      const execution = await PlatformClient.stopExecution(watched.id);
+      if (turn !== state.turn) return;
+      say('');
+      renderRun(execution);
+      keepWatching();
+    } catch (err) {
+      if (turn !== state.turn) return;
+      fail(err);
+      // 409: it had already finished. Read it again to show how.
+      if (err.status === 409) await selectRun(watched.id);
+    } finally {
+      stopBtn.disabled = false;
+    }
+  });
+
+  $('projects-refresh')?.addEventListener('click', () => openList());
+  $('scripts-back')?.addEventListener('click', () => openList());
+  $('script-back')?.addEventListener('click', () => loadScripts());
+  $('script-copy')?.addEventListener('click', () => copyText(scriptCode.textContent || ''));
+  searchInput.addEventListener('input', () => {
+    clearTimeout(state.searchTimer);
+    state.searchTimer = setTimeout(loadScripts, SEARCH_DELAY_MS);
+  });
+
+  // Sign-in, sign-out, and a changed role all start again from the project list.
+  document.addEventListener('platform-auth', (event) => {
+    const user = event.detail.user;
+    const same = (state.user?.id ?? null) === (user?.id ?? null) && (state.user?.role ?? null) === (user?.role ?? null);
+    const first = state.turn === 0;
+    state.user = user;
+    if (first || !same) openList();
+  });
+
+  // Jenkins was set up or changed under Settings: Run may now be available.
+  document.addEventListener('jenkins-settings', (event) => {
+    state.jenkins = event.detail.settings;
+    if (state.script) renderRun(state.execution);
+  });
+
+  // Leaving the tab stops the polling; coming back picks the watch up again.
+  document.querySelectorAll('.nav-btn[data-panel]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.getAttribute('data-panel') !== 'projects') { stopPolling(); return; }
+      if (state.execution && !isFinal(state.execution.status)) selectRun(state.execution.id);
+    });
+  });
+}
+
+// Settings → Jenkins. Shown once signed in to the platform. An ADMIN gets the form; other
+// roles only see whether Jenkins is set up. The API token goes to the platform server, which
+// stores it encrypted; the extension never keeps it.
+function setupJenkinsSettings() {
+  const $ = (id) => document.getElementById(id);
+  const section = $('jenkins-section');
+  const summary = $('jenkins-summary');
+  const adminForm = $('jenkins-admin');
+  const urlInput = $('jenkins-url');
+  const usernameInput = $('jenkins-username');
+  const tokenInput = $('jenkins-token');
+  const jobInput = $('jenkins-job');
+  const status = $('jenkins-status');
+  const testBtn = $('jenkins-test');
+  const saveBtn = $('jenkins-save');
+  const jobBtn = $('jenkins-create-job');
+  const required = [section, summary, adminForm, urlInput, usernameInput, tokenInput, jobInput, status, testBtn, saveBtn, jobBtn];
+  if (required.some((el) => !el)) return;
+
+  let shownFor = null;  // id and role of the user the block was last drawn for
+
+  // textContent and .value only: these values come from the server.
+  const fill = (settings) => {
+    summary.textContent = settings.configured ? '✅ Jenkins is set up.' : 'Jenkins is not set up yet.';
+    urlInput.value = settings.baseUrl;
+    usernameInput.value = settings.username;
+    jobInput.value = settings.jobName;
+    tokenInput.value = '';
+    tokenInput.placeholder = settings.hasToken ? 'saved — leave empty to keep it' : '';
+    jobBtn.disabled = !settings.configured;
+  };
+
+  async function load(user) {
+    section.style.display = user ? '' : 'none';
+    adminForm.style.display = user?.role === 'ADMIN' ? '' : 'none';
+    status.textContent = '';
+    if (!user) return;
+    summary.textContent = 'Loading…';
+    try {
+      fill(await PlatformClient.getJenkinsSettings());
+    } catch (err) {
+      summary.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  document.addEventListener('platform-auth', (event) => {
+    const user = event.detail.user;
+    const key = user ? `${user.id}:${user.role}` : '';
+    if (key === shownFor) return;
+    shownFor = key;
+    load(user);
+  });
+
+  const form = () => ({
+    baseUrl: urlInput.value.trim(),
+    username: usernameInput.value.trim(),
+    jobName: jobInput.value.trim(),
+    token: tokenInput.value,
+  });
+
+  // Runs one button's action and puts its result, or the reason it failed, in the status line.
+  async function act(button, busyText, work) {
+    button.disabled = true;
+    status.textContent = busyText;
+    try {
+      status.textContent = await work();
+    } catch (err) {
+      status.textContent = `❌ ${err.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  testBtn.addEventListener('click', () => act(testBtn, 'Testing…', async () => {
+    const result = await PlatformClient.testJenkins(form());
+    return `${result.ok ? '✅' : '❌'} ${result.message}`;
+  }));
+
+  saveBtn.addEventListener('click', () => act(saveBtn, 'Saving…', async () => {
+    const settings = await PlatformClient.saveJenkinsSettings(form());
+    fill(settings);
+    document.dispatchEvent(new CustomEvent('jenkins-settings', { detail: { settings } }));
+    return '✅ Saved. Press Create Job if the job is not in Jenkins yet.';
+  }));
+
+  jobBtn.addEventListener('click', () => act(jobBtn, 'Creating the job…', async () => {
+    const result = await PlatformClient.createJenkinsJob();
+    return `✅ Job ${result.created ? 'created' : 'updated'}: ${result.jobUrl}`;
+  }));
 }
 
 // ---- 11. SETTINGS ----
