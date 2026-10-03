@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Layout
 
-Three sibling projects forming one AI-powered Playwright testing suite. They share no code — the Extension talks to the Bridge over WebSocket; the Orchestrator is fully standalone.
+Four sibling projects forming one AI-powered Playwright testing suite. They share no code — the Extension talks to the Bridge over WebSocket; the Orchestrator is fully standalone.
 
 | Project | What it is | Runtime |
 |---|---|---|
 | `PlaywrightExtension/` | "Playwright AI Studio" Chrome MV3 extension (side panel UI, AI agents) | Browser, no build step |
 | `PlaywrightBridge/` | Local WebSocket server the extension uses for real Playwright runs + Claude Code CLI as LLM | Node (ESM) |
 | `PlaywrightOrchestrator/` | Standalone multi-agent QA CLI (`pworch`), 15 TypeScript agents | Node + ts-node |
+| `PlaywrightPlatform/` | Test-management backend (Fastify + PostgreSQL) and React web app; the extension signs in to it over HTTP | Node + Docker |
 
 `PlaywrightOrchestrator/CLAUDE.md` has full detail for that project — read it before working there.
 
@@ -39,6 +40,18 @@ npm test                     # playwright test (all 5 browser projects)
 npx playwright test tests/examples/sample.spec.ts --project=chromium   # single test
 ```
 See `PlaywrightOrchestrator/CLAUDE.md` for the full CLI command list (plan/generate/execute/heal/orchestrate/...) and architecture.
+
+### PlaywrightPlatform
+```bash
+cd PlaywrightPlatform
+docker compose up -d postgres && npm run db:migrate && npm run db:seed   # once
+npm run dev:server           # API on :3000
+npm run dev:web              # web on :5173
+npm test                     # server tests (Vitest, real Postgres)
+npm run test:e2e             # web tests (Playwright)
+npm run typecheck
+```
+Layering is strict: `routes/` → `services/` → `repositories/`; only repositories query the database; only `web/src/api/` calls `fetch`. See `PlaywrightPlatform/README.md`.
 
 ## Architecture
 

@@ -4,6 +4,7 @@ import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
 import type { Config } from './config';
 import type { Db } from './db';
 import { registerAuth, SESSION_COOKIE } from './plugins/auth';
@@ -37,7 +38,7 @@ const REDACT_PATHS = [
   '*.secret',
 ];
 
-export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance> {
+export async function buildApp({ config, db, webRoot }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
     logger:
       config.nodeEnv === 'test'
@@ -46,7 +47,7 @@ export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance
     genReqId: () => randomUUID(),
   });
 
-  registerErrorHandling(app);
+  registerErrorHandling(app, { spaFallback: Boolean(webRoot) });
 
   await app.register(helmet);
   await app.register(cors, {
@@ -86,6 +87,10 @@ export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance
     },
     { prefix: '/api' },
   );
+
+  if (webRoot) {
+    await app.register(fastifyStatic, { root: webRoot, wildcard: false });
+  }
 
   return app;
 }

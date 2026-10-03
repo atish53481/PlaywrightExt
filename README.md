@@ -19,6 +19,7 @@ Playwright AI Studio puts the AI agents inside the browser instead of next to it
 - **Chrome extension** ("Playwright AI Studio") — a side panel with Planner, Generator, Healer, Recorder, Inspector, Chat, Framework, Export, and Session agents that read the live page and generate/repair real Playwright code in place.
 - **Bridge** — a local WebSocket server that runs the generated code as a real headed `npx playwright test`, and proxies LLM calls to the Claude Code CLI.
 - **Orchestrator** (`pworch`) — a standalone 15-agent CLI for full plan → generate → execute → heal pipelines, usable independently of the extension.
+- **Platform** — a Fastify + PostgreSQL backend and React web app for projects, users, and roles, with the schema for scripts, skills, CI runs, and healing already in place. See `PlaywrightPlatform/README.md`.
 
 ## Tech Stack
 
@@ -27,6 +28,7 @@ Playwright AI Studio puts the AI agents inside the browser instead of next to it
 | `PlaywrightExtension/` | Vanilla JS, Chrome MV3, no build step |
 | `PlaywrightBridge/` | Node.js (ESM), `ws`, `@playwright/test`, spawns Claude Code CLI |
 | `PlaywrightOrchestrator/` | TypeScript, ts-node, Commander, `@playwright/test`, `@axe-core/playwright`, winston |
+| `PlaywrightPlatform/` | TypeScript, Fastify, Knex, PostgreSQL, Zod, React, Vite, Vitest, Playwright Test |
 | `landing/` | Static HTML/CSS/JS, deployed on Vercel |
 
 ## How to Run

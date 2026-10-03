@@ -5,7 +5,7 @@ function body(code: string, message: string, details: unknown = null) {
   return { error: { code, message, details } };
 }
 
-export function registerErrorHandling(app: FastifyInstance): void {
+export function registerErrorHandling(app: FastifyInstance, options: { spaFallback: boolean }): void {
   app.setErrorHandler((err: unknown, req, reply) => {
     if (err instanceof AppError) {
       return reply.status(err.statusCode).send(body(err.code, err.message, err.details));
@@ -28,7 +28,11 @@ export function registerErrorHandling(app: FastifyInstance): void {
       );
   });
 
-  app.setNotFoundHandler((_req, reply) => {
+  app.setNotFoundHandler((req, reply) => {
+    // Client-side routes such as /projects/5 have no file on disk; the SPA handles them.
+    if (options.spaFallback && req.method === 'GET' && !req.url.startsWith('/api')) {
+      return reply.type('text/html').sendFile('index.html');
+    }
     return reply.status(404).send(body('NOT_FOUND', 'Resource not found.'));
   });
 }

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { buildApp } from './app';
 import { ConfigError, loadConfig, loadEnvFile } from './config';
 import { createDb } from './db';
@@ -16,7 +18,10 @@ async function main(): Promise<void> {
   }
 
   const db = createDb(config.databaseUrl);
-  const app = await buildApp({ config, db });
+  // Resolves to PlaywrightPlatform/web/dist from both src/ (tsx) and dist/ (node).
+  const builtWeb = path.resolve(__dirname, '../../web/dist');
+  const serveWeb = config.nodeEnv === 'production' && existsSync(path.join(builtWeb, 'index.html'));
+  const app = await buildApp({ config, db, webRoot: serveWeb ? builtWeb : undefined });
 
   const shutdown = async () => {
     await app.close();
