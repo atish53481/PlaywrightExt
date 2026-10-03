@@ -274,6 +274,18 @@ export class ScriptRepository {
     return count > 0;
   }
 
+  /**
+   * Records how a run of `version` ended. Skipped when the script has since moved to a newer
+   * version, whose content has not been run. A run is not an edit, so `updated_at` and
+   * `updated_by` are left alone.
+   */
+  async markRunResult(id: number, version: number, state: 'PASSED' | 'FAILED'): Promise<void> {
+    await this.db('test_scripts')
+      .where({ id, version })
+      .whereNot('status', 'DELETED')
+      .update({ lifecycle_state: state });
+  }
+
   /** A script's versions joined to their authors. */
   private versions(scriptId: number): Knex.QueryBuilder {
     return this.db('test_script_versions as v')

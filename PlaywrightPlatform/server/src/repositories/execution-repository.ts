@@ -200,4 +200,17 @@ export class ExecutionRepository {
     const count = await this.db('test_executions').where({ id }).whereIn('status', UNFINISHED).update(columns);
     return count > 0;
   }
+
+  /**
+   * Locks an unfinished run until the transaction ends and returns how many tests its build
+   * has reported. Null when the run already has a final status.
+   */
+  async lockActive(id: number): Promise<{ total: number } | null> {
+    const row = await this.db('test_executions')
+      .where({ id })
+      .whereIn('status', UNFINISHED)
+      .forUpdate()
+      .first('total_tests');
+    return row ? { total: row.total_tests } : null;
+  }
 }

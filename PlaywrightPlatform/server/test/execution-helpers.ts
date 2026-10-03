@@ -1,5 +1,5 @@
 import { createUser, loginExt, makeApp, resetDb, type TestContext } from './helpers';
-import type { JenkinsStub } from './jenkins-stub';
+import type { JenkinsStub, StubBuild } from './jenkins-stub';
 import { newProject, newScript } from './script-helpers';
 
 type Headers = Record<string, string>;
@@ -70,4 +70,21 @@ export async function startRun(world: RunWorld, stub: JenkinsStub): Promise<Star
   const id: number = res.json().execution.id;
   const row = await world.ctx.db('test_executions').where({ id }).first('jenkins_queue_id');
   return { id, queueId: row.jenkins_queue_id, token: stub.lastParams.RUN_TOKEN };
+}
+
+/** When the stub's builds started (milliseconds since the epoch). */
+export const STARTED = 1_790_000_000_000;
+
+/** GET /executions/:id, after moving the clock past the 2-second sync limit. */
+export async function poll(world: RunWorld, id: number, headers: Headers = world.asUser) {
+  world.clock.t += 2_001;
+  return world.ctx.app.inject({ method: 'GET', url: `/api/executions/${id}`, headers });
+}
+
+/** Tells the stub the queued run became build `number`. The build is still running unless `build` says otherwise. */
+export function setBuild(stub: JenkinsStub, queueId: number, number: number, build: Partial<StubBuild> = {}): void {
+  const item = stub.queue.get(queueId);
+  if (!item) throw new Error(`the stub has no queue item ${queueId}`);
+  item.buildNumber = number;
+  stub.builds.set(`${JOB}/${number}`, { building: true, result: null, timestamp: STARTED, duration: 0, ...build });
 }

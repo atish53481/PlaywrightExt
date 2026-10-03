@@ -1,14 +1,15 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { AppError, notFound } from '../errors';
-import { JenkinsError } from '../jenkins/jenkins-client';
+import { JenkinsError, type BuildState } from '../jenkins/jenkins-client';
+import { jenkinsReportUrl } from '../jenkins/urls';
 import type { Transact } from '../repositories';
 import type { AuditRepository } from '../repositories/audit-repository';
-import type { ExecutionRepository } from '../repositories/execution-repository';
+import type { ExecutionPatch, ExecutionRepository } from '../repositories/execution-repository';
 import type { ScriptRepository } from '../repositories/script-repository';
 import { hashToken, newToken } from '../security/tokens';
-import type { Actor, Execution } from '../types';
+import type { Actor, Execution, ExecutionStatus } from '../types';
 import type { AuditService } from './audit-service';
-import { toAppError, type JenkinsService } from './jenkins-service';
+import { toAppError, type JenkinsLink, type JenkinsService } from './jenkins-service';
 
 export interface ExecutionOptions {
   /** The address a Jenkins build uses to call this server, without a trailing slash. */
@@ -30,7 +31,43 @@ function runInProgress(executionId: number): AppError {
   );
 }
 
+const SYNC_INTERVAL_MS = 2_000;
+const QUEUE_TIMEOUT_MS = 10 * 60_000;
+
+const FINAL: ReadonlySet<ExecutionStatus> = new Set<ExecutionStatus>(['PASSED', 'FAILED', 'ABORTED', 'ERROR']);
+
+const BUILD_FAILED_EARLY = 'The build failed before the tests ran. Open the Jenkins build for the log.';
+const BUILD_NOT_RUN = 'The build ended without running the tests. Open the Jenkins build for the log.';
+const BUILD_LOST = 'Jenkins no longer has this run. Open the job in Jenkins to see what happened.';
+const QUEUE_TIMED_OUT = 'Jenkins did not start the build. Check that an agent is online.';
+
+interface Outcome {
+  status: 'PASSED' | 'FAILED' | 'ABORTED' | 'ERROR';
+  errorMessage?: string;
+}
+
+/** The final status for a build that ended. `total` is how many tests the build reported back. */
+function outcomeOf(result: BuildState['result'], total: number): Outcome {
+  switch (result) {
+    case 'SUCCESS':
+      return { status: 'PASSED' };
+    case 'UNSTABLE':
+      return { status: 'FAILED' };
+    case 'FAILURE':
+      // The pipeline marks failing tests UNSTABLE, so FAILURE means the build itself broke,
+      // unless it got far enough to report tests.
+      return total > 0 ? { status: 'FAILED' } : { status: 'ERROR', errorMessage: BUILD_FAILED_EARLY };
+    case 'ABORTED':
+      return { status: 'ABORTED' };
+    default:
+      return { status: 'ERROR', errorMessage: BUILD_NOT_RUN };
+  }
+}
+
 export class ExecutionService {
+  /** When each unfinished run was last checked against Jenkins (milliseconds). */
+  private readonly lastSync = new Map<number, number>();
+
   constructor(
     private readonly executions: ExecutionRepository,
     private readonly scripts: ScriptRepository,
@@ -50,6 +87,9 @@ export class ExecutionService {
     if (!script) throw notFound('Script');
     if (script.projectStatus !== 'ACTIVE') throw projectNotActive();
     const link = await this.jenkins.link();
+    // A run nobody watched still reads as unfinished. Bring it up to date before refusing a new one.
+    const stale = await this.executions.findActive(scriptId);
+    if (stale) await this.sync(stale, link);
 
     // The build proves who it is with this token. Only its hash is stored.
     const token = newToken();
@@ -106,7 +146,15 @@ export class ExecutionService {
     return this.find(created.id);
   }
 
+  /** Reads a run. An unfinished one is first brought up to date with Jenkins, at most once every 2 seconds. */
   async get(id: number): Promise<Execution> {
+    const execution = await this.find(id);
+    if (FINAL.has(execution.status)) return execution;
+    const now = this.options.now();
+    const last = this.lastSync.get(id);
+    if (last !== undefined && now - last < SYNC_INTERVAL_MS) return execution;
+    this.lastSync.set(id, now);
+    await this.sync(execution, await this.jenkins.link());
     return this.find(id);
   }
 
@@ -114,6 +162,92 @@ export class ExecutionService {
   async list(scriptId: number, limit: number): Promise<Execution[]> {
     if (!(await this.scripts.findLive(scriptId))) throw notFound('Script');
     return this.executions.listForScript(scriptId, limit);
+  }
+
+  /**
+   * Brings one unfinished run up to date with Jenkins. Status comes only from Jenkins.
+   * If Jenkins cannot be reached, or refuses, the run is left as it is: one bad poll must
+   * not fail a run.
+   */
+  private async sync(execution: Execution, link: JenkinsLink): Promise<void> {
+    try {
+      let buildNumber = execution.buildNumber;
+      if (buildNumber === null) {
+        // Until the build has a number, only the queue item knows what became of the run.
+        const item = execution.queueId === null ? null : await link.client.queueItem(execution.queueId);
+        if (item?.cancelled) {
+          await this.finish(execution, () => ({ status: 'ABORTED' }), { completedAt: this.nowDate() });
+          return;
+        }
+        if (!item || item.buildNumber === null) {
+          await this.expireIfStuck(execution, link);
+          return;
+        }
+        buildNumber = item.buildNumber;
+        await this.executions.updateActive(execution.id, {
+          buildNumber,
+          reportUrl: jenkinsReportUrl(link.baseUrl, execution.jobName, buildNumber),
+        });
+      }
+
+      const build = await link.client.build(execution.jobName, buildNumber);
+      const startedAt = new Date(build.timestamp);
+      if (build.building) {
+        if (execution.status !== 'RUNNING') {
+          await this.executions.updateActive(execution.id, { status: 'RUNNING', stage: 'RUNNING', startedAt });
+        }
+        return;
+      }
+      await this.finish(execution, (total) => outcomeOf(build.result, total), {
+        startedAt,
+        completedAt: new Date(build.timestamp + build.duration),
+        durationMs: build.duration,
+      });
+    } catch (err) {
+      if (!(err instanceof JenkinsError)) throw err;
+      // Unreachable or refused: nothing changes, and the caller answers with what is stored.
+      if (err.kind !== 'NOT_FOUND') return;
+      await this.finish(execution, () => ({ status: 'ERROR', errorMessage: BUILD_LOST }), {
+        completedAt: this.nowDate(),
+      });
+    }
+  }
+
+  /** A run that has waited 10 minutes for a build is given up, and taken out of the Jenkins queue. */
+  private async expireIfStuck(execution: Execution, link: JenkinsLink): Promise<void> {
+    if (this.options.now() - execution.createdAt.getTime() <= QUEUE_TIMEOUT_MS) return;
+    // Otherwise the build could start later, with a run token that no longer works.
+    if (execution.queueId !== null) await link.client.cancelQueue(execution.queueId);
+    await this.finish(execution, () => ({ status: 'ERROR', errorMessage: QUEUE_TIMED_OUT }), {
+      completedAt: this.nowDate(),
+    });
+  }
+
+  /**
+   * Gives a run its final status. `decide` is told how many tests the build reported; the
+   * count is read under a lock, so a report arriving at the same moment is either counted
+   * or refused. Does nothing when the run is already final.
+   */
+  private async finish(
+    execution: Execution,
+    decide: (total: number) => Outcome,
+    times: { startedAt?: Date; completedAt: Date; durationMs?: number },
+  ): Promise<void> {
+    const status = await this.transact(async (r) => {
+      const reported = await r.executions.lockActive(execution.id);
+      if (!reported) return null;
+      const outcome = decide(reported.total);
+      const patch: ExecutionPatch = { status: outcome.status, stage: 'COMPLETED', callbackTokenHash: null, ...times };
+      if (outcome.errorMessage) patch.errorMessage = outcome.errorMessage;
+      await r.executions.updateActive(execution.id, patch);
+      if (outcome.status === 'PASSED' || outcome.status === 'FAILED') {
+        await r.scripts.markRunResult(execution.scriptId, execution.scriptVersion, outcome.status);
+      }
+      return outcome.status;
+    });
+    if (!status) return;
+    this.lastSync.delete(execution.id);
+    this.log.info(`[EXECUTION] Run ${execution.id} finished: ${status}`);
   }
 
   private async find(id: number): Promise<Execution> {
