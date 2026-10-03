@@ -13,8 +13,10 @@ import { SessionRepository } from './repositories/session-repository';
 import { UserRepository } from './repositories/user-repository';
 import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
+import { userRoutes } from './routes/users';
 import { AuditService } from './services/audit-service';
 import { AuthService } from './services/auth-service';
+import { UserService } from './services/user-service';
 
 export interface AppDeps {
   config: Config;
@@ -63,6 +65,7 @@ export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance
   const sessions = new SessionRepository(db);
   const audit = new AuditService(new AuditRepository(db), app.log);
   const auth = new AuthService(users, sessions, audit);
+  const userService = new UserService(users, sessions, audit, app.log);
 
   registerAuth(app, auth);
 
@@ -74,6 +77,7 @@ export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance
         },
       });
       await api.register(authRoutes, { auth, config });
+      await api.register(userRoutes, { users: userService });
     },
     { prefix: '/api' },
   );
