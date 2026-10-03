@@ -43,6 +43,8 @@ export type ScriptSource = 'MANUAL' | 'GENERATED' | 'RECORDED' | 'IMPORTED' | 'H
 export interface ScriptListItem {
   id: number;
   projectId: number;
+  /** Status of the owning project. Scripts can be changed only while it is ACTIVE. */
+  projectStatus: ProjectStatus;
   name: string;
   description: string;
   language: ScriptLanguage;

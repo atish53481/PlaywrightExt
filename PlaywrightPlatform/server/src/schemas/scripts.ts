@@ -79,6 +79,8 @@ export const createScriptBody = z.object({
 const scriptListItemDto = z.object({
   id: z.number(),
   projectId: z.number(),
+  // Lets the web hide write controls in an archived project; the API refuses those writes anyway.
+  projectStatus: z.enum(['ACTIVE', 'ARCHIVED', 'DELETED']),
   name: z.string(),
   description: z.string(),
   language,
@@ -101,6 +103,7 @@ export function toScriptListItemDto(s: ScriptSummary): z.infer<typeof scriptList
   return {
     id: s.id,
     projectId: s.projectId,
+    projectStatus: s.projectStatus,
     name: s.name,
     description: s.description,
     language: s.language,

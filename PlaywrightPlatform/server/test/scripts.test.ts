@@ -262,6 +262,13 @@ describe('scripts: create and read', () => {
     }
   });
 
+  it('reports the status of the owning project with the script', async () => {
+    const created = await newScript(ctx, asAdmin, projectId);
+    expect((await get(created.id)).json().script.projectStatus).toBe('ACTIVE');
+    expect((await setProject({ status: 'ARCHIVED' })).statusCode).toBe(200);
+    expect((await get(created.id)).json().script.projectStatus).toBe('ARCHIVED');
+  });
+
   it('gets a script with its content, tags, and last editor', async () => {
     const created = await newScript(ctx, asAdmin, projectId, { tags: ['smoke'] });
     const res = await get(created.id);
@@ -274,7 +281,6 @@ describe('scripts: create and read', () => {
       updatedBy: 'Ada Admin',
       version: 1,
     });
-    expect(res.json().script).not.toHaveProperty('projectStatus');
   });
 
   it('answers 404 for an unknown or deleted script and 400 for a malformed id', async () => {

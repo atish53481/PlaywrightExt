@@ -7,6 +7,7 @@ import {
   apiCreateProject,
   apiCreateScript,
   apiHeaders,
+  apiSaveContent,
   scriptRow,
   signIn,
 } from './helpers';
@@ -156,6 +157,31 @@ test('an archived project shows its scripts read-only, even to a writer', async 
   await expect(page.getByText('This project is archived, so its scripts cannot be changed.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'New Script' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Delete' })).toHaveCount(0);
+});
+
+test('an archived project offers no Edit, Restore, or New Script page, even to a writer', async ({ page, request }) => {
+  const projectId = await apiCreateProject(request, `Archived pages ${Date.now()}`);
+  const scriptId = await apiCreateScript(request, USER, projectId, { name: 'Frozen', content: '// one\n' });
+  await apiSaveContent(request, USER, scriptId, '// two\n', 1);
+  const archived = await request.put(`/api/projects/${projectId}`, {
+    headers: await apiHeaders(request, ADMIN),
+    data: { status: 'ARCHIVED' },
+  });
+  expect(archived.ok()).toBeTruthy();
+
+  await signIn(page, USER);
+  await page.goto(`/scripts/${scriptId}?edit=1`);
+  await expect(page.getByRole('link', { name: 'Version History' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0);
+
+  await page.goto(`/scripts/${scriptId}/versions`);
+  await expect(page.getByRole('button', { name: 'Download' })).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Restore' })).toHaveCount(0);
+
+  await page.goto(`/projects/${projectId}/scripts/new`);
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectId}\\?tab=scripts$`));
+  await expect(page.getByText('This project is archived, so its scripts cannot be changed.')).toBeVisible();
 });
 
 test('Record and Generate explain the extension, and an empty project says it is empty', async ({ page, request }) => {

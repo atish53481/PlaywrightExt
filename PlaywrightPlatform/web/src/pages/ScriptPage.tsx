@@ -67,7 +67,9 @@ function ScriptEditor({ initial }: { initial: Script }) {
   const [latest, setLatest] = useState<Script | null>(null); // fetched for "Compare with latest"
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
-  const canWrite = user?.role === 'ADMIN' || user?.role === 'USER';
+  const archived = base.projectStatus !== 'ACTIVE';
+  // The API refuses writes from a VIEWER and in an archived project, so the controls are not offered.
+  const canWrite = (user?.role === 'ADMIN' || user?.role === 'USER') && !archived;
   const editing = canWrite && params.get('edit') === '1';
   const changed = {
     name: draft.name !== base.name,
@@ -183,6 +185,7 @@ function ScriptEditor({ initial }: { initial: Script }) {
         </div>
         <StatusBadge status={base.lifecycleState} />
       </div>
+      {archived && <p className="muted">This project is archived, so its scripts cannot be changed.</p>}
 
       <div className="toolbar">
         <Link to={`/projects/${base.projectId}?tab=scripts`}>Back to scripts</Link>

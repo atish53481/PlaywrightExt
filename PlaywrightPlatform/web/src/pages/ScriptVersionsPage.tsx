@@ -104,7 +104,7 @@ export function ScriptVersionsPage() {
                   <button className="btn btn-secondary btn-sm" onClick={() => void download(version.version)}>
                     Download
                   </button>
-                  {canWrite && version.version !== latest && (
+                  {canWrite && current.projectStatus === 'ACTIVE' && version.version !== latest && (
                     <button className="btn btn-secondary btn-sm" onClick={() => setRestoring(version.version)}>
                       Restore
                     </button>

@@ -34,7 +34,9 @@ export function NewScriptPage() {
   const guard = useUnsavedGuard(dirty);
   const back = `/projects/${projectId}?tab=scripts`;
 
-  if (isViewer) return <Navigate to={back} replace />;
+  // The API refuses new scripts from a VIEWER and in an archived project, so the form is not offered.
+  const archived = project.data != null && project.data.project.status !== 'ACTIVE';
+  if (isViewer || archived) return <Navigate to={back} replace />;
   if (project.error) {
     return (
       <>
