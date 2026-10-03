@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Branch `feat/platform-jenkins`. Work from the repo root `PlaywrightExt/` unless a step says otherwise.
+- Work in the existing checkout; do not create a new worktree or clone. This machine has `core.autocrlf=true` and the repo has no `.gitattributes`, so a fresh checkout would give the test fixtures CRLF line endings, and the server tests that compare script content would fail.
 - No database migration. Every table and column used exists in `PlaywrightPlatform/server/src/migrations/005_ci_execution.ts`.
 - The web app (`PlaywrightPlatform/web`) is not changed.
 - Layering: `routes/` → `services/` → `repositories/`. Only repositories query the database. Only `src/jenkins/jenkins-client.ts` calls Jenkins.
