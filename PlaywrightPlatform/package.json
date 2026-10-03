@@ -1,0 +1,18 @@
+{
+  "name": "playwright-platform",
+  "private": true,
+  "workspaces": ["server"],
+  "scripts": {
+    "db:up": "docker compose up -d postgres",
+    "db:migrate": "npm run db:migrate -w server",
+    "db:rollback": "npm run db:rollback -w server",
+    "db:seed": "npm run db:seed -w server",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w web && npm run build -w server",
+    "start": "npm run start -w server",
+    "test": "npm run test -w server",
+    "test:e2e": "npm run test:e2e -w web",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
+  }
+}
