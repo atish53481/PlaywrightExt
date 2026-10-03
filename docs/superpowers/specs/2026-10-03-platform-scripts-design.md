@@ -1,7 +1,7 @@
 # Platform Scripts — Design
 
 Date: 2026-10-03
-Status: awaiting review
+Status: approved
 Sub-project: 2 of 5 (see `2026-10-03-platform-foundation-design.md`, section 1)
 Source requirements: `../Req.md` sections 6, 7, 14–17, 31, 33, 34, 58 (one level above this repo)
 Branch: `feat/platform-scripts`, cut from `feat/platform-foundation`

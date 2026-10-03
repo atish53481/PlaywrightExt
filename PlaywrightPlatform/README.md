@@ -1,8 +1,8 @@
 # Playwright Platform
 
-Backend, database, and web app for Playwright AI Studio: projects, users, roles, and audit
-logging today; scripts, skills, Jenkins execution, reports, and healing in later releases.
-The database already contains the tables for all of those.
+Backend, database, and web app for Playwright AI Studio: projects, Playwright scripts with
+version history, users, roles, and audit logging today; skills, Jenkins execution, reports,
+and healing in later releases. The database already contains the tables for all of those.
 
 ## Architecture
 
@@ -90,12 +90,40 @@ Schema changes are always a new file in `server/src/migrations/` added to the li
 | View projects | yes | yes | yes |
 | Create, edit, archive, delete projects | yes | no | no |
 | Manage users (Settings → Users) | yes | no | no |
+| View, search, and download scripts and their history | yes | yes | yes |
+| Create, import, edit, duplicate, restore, and delete scripts | yes | yes | no |
+
+## Scripts
+
+Scripts live in the database, inside a project (project → **Scripts** tab).
+
+- **Versions.** Saving changed content creates a new version (`v1`, `v2`, …). Changing the
+  name, description, test scenario, or tags does not. History is never rewritten: restoring
+  `v1` creates a new version with that content. The **Version History** page compares any two
+  versions side by side.
+- **Two people editing.** A save is refused if someone else saved a newer version in the
+  meantime. The page keeps your text and offers **Reload latest** or **Compare with latest**;
+  after comparing, **Keep my text** puts your text on top of the latest version so it can be saved.
+- **Limits.** Name up to 200 characters, unique within the project (case does not matter);
+  content up to 1,000,000 characters and 2 MB as sent; up to 20 tags of at most 40 characters
+  (letters, digits, spaces, and `- _ . @`).
+- **Line endings** are stored as `\n`.
+- **Import** accepts `.ts`, `.js`, `.mjs`, and `.cjs` files up to 1 MB.
+- **Delete** hides the script and frees its name; the row and its history stay in the database.
+- **Archived projects** are read-only: their scripts can be viewed and downloaded, not changed.
+- **Run** and **Heal** are shown disabled until the Jenkins and healing releases.
+
+The server stores and returns script content as text. It never executes it.
 
 ## Connect the extension
 
 Load `PlaywrightExtension/` unpacked in Chrome, open Settings in the side panel, enter the
 platform URL (for example `http://localhost:3000`) and your credentials under **Platform**,
 and choose **Sign in**. The password is not stored; a 30-day token is.
+
+Once signed in, the Generator, Recorder, and Orchestrator panels show **💾 Save to Project**
+beside Copy: choose a project and a name, and the script appears in that project's Scripts
+tab. Only TypeScript and JavaScript output can be saved.
 
 ## Tests
 
@@ -126,6 +154,17 @@ All routes are under `/api`. Errors always look like
 | GET | `/users` | ADMIN |
 | POST | `/users` | ADMIN |
 | PUT | `/users/:id` | ADMIN |
+| GET | `/projects/:projectId/scripts` | signed in (`status=DELETED`: ADMIN) |
+| POST | `/projects/:projectId/scripts` | ADMIN, USER |
+| GET | `/scripts/:id` | signed in |
+| PUT | `/scripts/:id` | ADMIN, USER |
+| DELETE | `/scripts/:id` | ADMIN, USER (soft delete) |
+| POST | `/scripts/:id/duplicate` | ADMIN, USER |
+| GET | `/scripts/:id/versions` | signed in |
+| GET | `/scripts/:id/versions/:version` | signed in |
+| POST | `/scripts/:id/versions/:version/restore` | ADMIN, USER |
+| GET | `/scripts/:id/download` | signed in (optional `?version=`) |
+| GET | `/tags` | signed in |
 
 ## Troubleshooting
 
@@ -139,3 +178,7 @@ All routes are under `/api`. Errors always look like
 | Login returns 429 | Ten attempts per 15 minutes per address. Wait, or restart the server in development. |
 | Web app shows "Missing or invalid CSRF token" | The page is older than the session. Reload it. |
 | Sign-in works but the next request is 401 in production | The site is served over plain HTTP, so the `Secure` cookie is dropped. Serve it over HTTPS. |
+| Saving a script says someone else saved a newer version | Two people edited the same version. Choose **Compare with latest**, then **Keep my text** or **Reload latest**. |
+| A save answers `PAYLOAD_TOO_LARGE` | The request is over 2 MB. Text with many non-English characters can reach that before 1,000,000 characters. Split the script. |
+| A script change answers `PROJECT_NOT_ACTIVE` | The project is archived. Restore it on the Projects page (Status: Archived → Restore). |
+| The extension's Save to Project says to sign in first | Open the side panel's Settings → Platform, enter the platform URL and your credentials, and choose **Sign in**. |
