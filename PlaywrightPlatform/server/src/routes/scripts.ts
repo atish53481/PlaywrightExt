@@ -1,8 +1,19 @@
 import type { FastifyInstance } from 'fastify';
+import { AppError } from '../errors';
 import { parse, shape } from '../http';
 import { actorOf, signedIn, writers } from '../plugins/auth';
 import { idParams } from '../schemas/common';
-import { createScriptBody, projectScriptsParams, scriptResponse, toScriptDto } from '../schemas/scripts';
+import {
+  createScriptBody,
+  listScriptsQuery,
+  listTagsQuery,
+  projectScriptsParams,
+  scriptListResponse,
+  scriptResponse,
+  tagListResponse,
+  toScriptDto,
+  toScriptListItemDto,
+} from '../schemas/scripts';
 import type { ScriptService } from '../services/script-service';
 
 // A script holds up to 1,000,000 characters, which can exceed Fastify's 1 MiB default once encoded.
@@ -13,6 +24,26 @@ export interface ScriptRouteDeps {
 }
 
 export async function scriptRoutes(app: FastifyInstance, deps: ScriptRouteDeps): Promise<void> {
+  app.get('/projects/:projectId/scripts', { preHandler: signedIn }, async (req) => {
+    const { projectId } = parse(projectScriptsParams, req.params);
+    const query = parse(listScriptsQuery, req.query);
+    if (query.status === 'DELETED' && req.auth?.user.role !== 'ADMIN') {
+      throw new AppError(403, 'FORBIDDEN', 'Only administrators can list deleted scripts.');
+    }
+    const { items, total } = await deps.scripts.list(projectId, query);
+    return shape(scriptListResponse, {
+      items: items.map(toScriptListItemDto),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    });
+  });
+
+  app.get('/tags', { preHandler: signedIn }, async (req) => {
+    const { search } = parse(listTagsQuery, req.query);
+    return shape(tagListResponse, { items: await deps.scripts.tags(search) });
+  });
+
   app.post(
     '/projects/:projectId/scripts',
     { preHandler: writers, bodyLimit: SCRIPT_BODY_LIMIT },

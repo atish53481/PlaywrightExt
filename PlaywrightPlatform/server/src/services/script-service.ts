@@ -3,9 +3,9 @@ import { AppError, notFound } from '../errors';
 import type { Transact } from '../repositories';
 import type { AuditRepository } from '../repositories/audit-repository';
 import type { ProjectRepository } from '../repositories/project-repository';
-import { isScriptNameClash, type ScriptRepository } from '../repositories/script-repository';
+import { isScriptNameClash, type ScriptListQuery, type ScriptRepository } from '../repositories/script-repository';
 import type { TagRepository } from '../repositories/tag-repository';
-import type { Actor, Script, ScriptLanguage, ScriptType } from '../types';
+import type { Actor, Script, ScriptLanguage, ScriptSummary, ScriptType } from '../types';
 import type { AuditService } from './audit-service';
 
 export interface CreateScriptInput {
@@ -43,6 +43,16 @@ export class ScriptService {
     private readonly transact: Transact,
     private readonly log: FastifyBaseLogger,
   ) {}
+
+  async list(projectId: number, query: ScriptListQuery): Promise<{ items: ScriptSummary[]; total: number }> {
+    if (!(await this.projects.findLiveById(projectId))) throw notFound('Project');
+    return this.scripts.list(projectId, query);
+  }
+
+  /** Existing tag names for autocomplete. */
+  tags(search?: string): Promise<string[]> {
+    return this.tagRepo.list(search, 50);
+  }
 
   async get(id: number): Promise<Script> {
     const script = await this.scripts.findLive(id);

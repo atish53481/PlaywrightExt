@@ -1,5 +1,6 @@
 import type { Db } from '../db';
 import type { Project, ProjectListItem, ProjectOverview, ProjectStatus } from '../types';
+import { escapeLike } from './sql';
 
 interface ProjectRow {
   id: number;
@@ -21,11 +22,6 @@ function toProject(row: ProjectRow): Project {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-/** Escapes LIKE wildcards so user text matches literally. Pairs with `escape '\'` in the query. */
-function escapeLike(text: string): string {
-  return text.replace(/[\\%_]/g, '\\$&');
 }
 
 export interface ProjectListQuery {

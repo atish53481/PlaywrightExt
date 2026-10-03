@@ -118,3 +118,23 @@ export function toScriptListItemDto(s: ScriptSummary): z.infer<typeof scriptList
 export function toScriptDto(s: Script): z.infer<typeof scriptDto> {
   return { ...toScriptListItemDto(s), testScenario: s.testScenario, content: s.content };
 }
+
+export const listScriptsQuery = z.object({
+  search: cleanText(z.string().trim().max(200)).optional(),
+  tag: cleanText(z.string().trim().max(40)).optional(),
+  // ARCHIVED is not a state scripts can reach in this release.
+  status: z.enum(['ACTIVE', 'DELETED']).default('ACTIVE'),
+  page: z.coerce.number().int().min(1).max(100_000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export const listTagsQuery = z.object({ search: cleanText(z.string().trim().max(40)).optional() });
+
+export const scriptListResponse = z.object({
+  items: z.array(scriptListItemDto),
+  total: z.number(),
+  page: z.number(),
+  pageSize: z.number(),
+});
+
+export const tagListResponse = z.object({ items: z.array(z.string()) });

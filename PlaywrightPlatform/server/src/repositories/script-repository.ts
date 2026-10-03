@@ -10,6 +10,7 @@ import type {
   ScriptType,
   ScriptVersionSource,
 } from '../types';
+import { escapeLike } from './sql';
 
 interface SummaryRow {
   id: number;
@@ -104,6 +105,14 @@ export interface NewScriptVersion {
   createdBy: number;
 }
 
+export interface ScriptListQuery {
+  search?: string;
+  tag?: string;
+  status: 'ACTIVE' | 'DELETED';
+  page: number;
+  pageSize: number;
+}
+
 export class ScriptRepository {
   constructor(private readonly db: Db) {}
 
@@ -113,6 +122,38 @@ export class ScriptRepository {
       .join('projects as p', 'p.id', 's.project_id')
       .leftJoin('users as u', 'u.id', 's.updated_by')
       .whereNot('p.status', 'DELETED');
+  }
+
+  /** One page of a project's scripts, most recently updated first. Never selects script content. */
+  async list(projectId: number, query: ScriptListQuery): Promise<{ items: ScriptSummary[]; total: number }> {
+    const filtered = this.scripts().where('s.project_id', projectId).where('s.status', query.status);
+    if (query.search) {
+      const pattern = `%${escapeLike(query.search)}%`;
+      filtered.whereRaw(
+        `(s.name ilike ? escape '\\' or s.description ilike ? escape '\\' or s.test_scenario ilike ? escape '\\'
+          or exists (select 1 from script_tags st join tags t on t.id = st.tag_id
+                     where st.script_id = s.id and t.name ilike ? escape '\\'))`,
+        [pattern, pattern, pattern, pattern],
+      );
+    }
+    if (query.tag) {
+      filtered.whereRaw(
+        `exists (select 1 from script_tags st join tags t on t.id = st.tag_id
+                 where st.script_id = s.id and lower(t.name) = lower(?))`,
+        [query.tag],
+      );
+    }
+
+    const totalRow = await filtered.clone().count('* as n').first();
+    const rows: SummaryRow[] = await filtered
+      .clone()
+      .select(...SUMMARY_COLUMNS, this.db.raw(TAGS_COLUMN))
+      .orderBy('s.updated_at', 'desc')
+      .orderBy('s.id', 'desc')
+      .limit(query.pageSize)
+      .offset((query.page - 1) * query.pageSize);
+
+    return { total: Number(totalRow?.n ?? 0), items: rows.map(toSummary) };
   }
 
   /** One script with its content. "Live" means neither it nor its project is deleted. */

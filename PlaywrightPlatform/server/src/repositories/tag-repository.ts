@@ -1,4 +1,5 @@
 import type { Db } from '../db';
+import { escapeLike } from './sql';
 
 export class TagRepository {
   constructor(private readonly db: Db) {}
@@ -27,5 +28,12 @@ export class TagRepository {
        select ?, t.id from tags t where lower(t.name) in (select lower(n) from unnest(?::text[]) as n)`,
       [scriptId, sorted],
     );
+  }
+
+  /** Tag names in alphabetical order, optionally only those containing `search`. */
+  async list(search: string | undefined, limit: number): Promise<string[]> {
+    const query = this.db('tags').orderByRaw('lower(name) collate "C"').limit(limit);
+    if (search) query.whereRaw("name ilike ? escape '\\'", [`%${escapeLike(search)}%`]);
+    return query.pluck('name');
   }
 }
