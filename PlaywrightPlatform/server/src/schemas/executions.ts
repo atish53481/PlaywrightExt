@@ -59,3 +59,19 @@ export function toExecutionDto(e: Execution): z.infer<typeof executionDto> {
     durationMs: e.durationMs,
   };
 }
+
+const count = z.number().int().min(0).max(1_000_000);
+
+/** What the pipeline posts when the tests have run. Unknown keys, such as a status, are dropped. */
+export const runReportBody = z.object({
+  total: count,
+  passed: count,
+  failed: count,
+  skipped: count,
+  // Trimmed rather than refused: a long failure message must not cost the run its counts.
+  // PostgreSQL text cannot hold a NUL character, so those are removed.
+  errorMessage: z
+    .string()
+    .transform((text) => text.replace(/\u0000/g, '').slice(0, 2000))
+    .optional(),
+});

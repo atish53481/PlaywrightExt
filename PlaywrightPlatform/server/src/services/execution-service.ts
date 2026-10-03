@@ -6,7 +6,7 @@ import type { Transact } from '../repositories';
 import type { AuditRepository } from '../repositories/audit-repository';
 import type { ExecutionPatch, ExecutionRepository } from '../repositories/execution-repository';
 import type { ScriptRepository } from '../repositories/script-repository';
-import { hashToken, newToken } from '../security/tokens';
+import { hashToken, newToken, safeEqual } from '../security/tokens';
 import type { Actor, Execution, ExecutionStatus } from '../types';
 import type { AuditService } from './audit-service';
 import { toAppError, type JenkinsLink, type JenkinsService } from './jenkins-service';
@@ -29,6 +29,24 @@ function runInProgress(executionId: number): AppError {
     'This script is already running. Wait for that run to finish, or stop it.',
     { executionId },
   );
+}
+
+function alreadyFinished(): AppError {
+  return new AppError(409, 'EXECUTION_FINISHED', 'This run has already finished.');
+}
+
+// One answer for every reason, so a caller without the token learns nothing about the run.
+function badRunToken(): AppError {
+  return new AppError(401, 'UNAUTHENTICATED', 'The run token is not valid for this run.');
+}
+
+/** What a build reports when its tests have run. */
+export interface RunReport {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errorMessage?: string;
 }
 
 const SYNC_INTERVAL_MS = 2_000;
@@ -165,6 +183,77 @@ export class ExecutionService {
   }
 
   /**
+   * Aborts an unfinished run. A run still waiting in the queue is ABORTED at once. For a
+   * build, the answer carries what Jenkins says right after the stop request, which may
+   * still be RUNNING.
+   */
+  async stop(actor: Actor, id: number): Promise<Execution> {
+    const stored = await this.find(id);
+    if (FINAL.has(stored.status)) throw alreadyFinished();
+    const link = await this.jenkins.link();
+
+    // The queued run may have become a build, or ended, since it was last read.
+    await this.sync(stored, link);
+    const execution = await this.find(id);
+    if (FINAL.has(execution.status)) throw alreadyFinished();
+
+    try {
+      if (execution.buildNumber !== null) {
+        await link.client.stopBuild(execution.jobName, execution.buildNumber);
+      } else if (execution.queueId !== null) {
+        await link.client.cancelQueue(execution.queueId);
+      }
+    } catch (err) {
+      throw toAppError(err);
+    }
+    await this.record(actor, 'execution.stop', id, {
+      scriptId: execution.scriptId,
+      buildNumber: execution.buildNumber,
+    });
+
+    if (execution.buildNumber === null) {
+      // Nothing is building, so there is nothing more to wait for.
+      await this.finish(execution, () => ({ status: 'ABORTED' }), { completedAt: this.nowDate() });
+    } else {
+      await this.sync(execution, link);
+    }
+    this.log.info(`[EXECUTION] Stop requested for run ${id}`);
+    return this.find(id);
+  }
+
+  /**
+   * The script for a build: the version recorded when Run was pressed, whatever has happened
+   * to the script since. The build also reports its number here, which is how a run is found
+   * again after Jenkins has forgotten the queue item.
+   */
+  async scriptFor(id: number, token: string, buildNumber: number | null): Promise<string> {
+    const execution = await this.authorize(id, token);
+    if (buildNumber !== null && execution.buildNumber === null) {
+      await this.executions.updateActive(id, {
+        buildNumber,
+        reportUrl: jenkinsReportUrl(execution.jenkinsBaseUrl, execution.jobName, buildNumber),
+      });
+    }
+    const version = await this.scripts.findVersion(execution.scriptId, execution.scriptVersion);
+    if (!version) throw notFound('Script version');
+    return version.content;
+  }
+
+  /** Stores what the build reports. Status is never taken from here: it comes only from Jenkins. */
+  async report(id: number, token: string, report: RunReport): Promise<void> {
+    await this.authorize(id, token);
+    const stored = await this.executions.updateActive(id, {
+      total: report.total,
+      passed: report.passed,
+      failed: report.failed,
+      skipped: report.skipped,
+      errorMessage: report.errorMessage ?? null,
+    });
+    // False when the run reached a final status between the check and the write.
+    if (!stored) throw badRunToken();
+  }
+
+  /**
    * Brings one unfinished run up to date with Jenkins. Status comes only from Jenkins.
    * If Jenkins cannot be reached, or refuses, the run is left as it is: one bad poll must
    * not fail a run.
@@ -248,6 +337,16 @@ export class ExecutionService {
     if (!status) return;
     this.lastSync.delete(execution.id);
     this.log.info(`[EXECUTION] Run ${execution.id} finished: ${status}`);
+  }
+
+  /** The run a token belongs to. Refused unless the token is that run's own and the run is unfinished. */
+  private async authorize(id: number, token: string): Promise<Execution> {
+    const execution = await this.executions.find(id);
+    const expected = execution?.callbackTokenHash;
+    if (!execution || !expected || FINAL.has(execution.status) || !safeEqual(hashToken(token), expected)) {
+      throw badRunToken();
+    }
+    return execution;
   }
 
   private async find(id: number): Promise<Execution> {
