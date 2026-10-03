@@ -128,3 +128,39 @@ export interface JenkinsSettings {
   jobName: string;
   secretCiphertext: string | null;
 }
+
+export type ExecutionStatus = 'QUEUED' | 'RUNNING' | 'PASSED' | 'FAILED' | 'ABORTED' | 'ERROR';
+/** The table allows more stages; this release writes these three. */
+export type ExecutionStage = 'QUEUED' | 'RUNNING' | 'COMPLETED';
+
+/** One run of one script version on Jenkins. */
+export interface Execution {
+  id: number;
+  projectId: number;
+  scriptId: number;
+  scriptName: string;
+  scriptVersion: number;
+  status: ExecutionStatus;
+  stage: ExecutionStage;
+  /** The Jenkins queue item; null until Jenkins accepted the run. */
+  queueId: number | null;
+  /** Null until Jenkins gave the build a number. */
+  buildNumber: number | null;
+  /** The Jenkins job the run was started on. */
+  jobName: string;
+  /** The saved address of the Jenkins server, for building links. */
+  jenkinsBaseUrl: string;
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errorMessage: string | null;
+  /** Display name of the person who started the run. */
+  triggeredBy: string | null;
+  /** SHA-256 of the run token; null once the run is final. Never sent to a client. */
+  callbackTokenHash: string | null;
+  createdAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  durationMs: number | null;
+}

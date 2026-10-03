@@ -1,5 +1,6 @@
 import type { Db } from '../db';
 import { AuditRepository } from './audit-repository';
+import { ExecutionRepository } from './execution-repository';
 import { JenkinsRepository } from './jenkins-repository';
 import { ProjectRepository } from './project-repository';
 import { ScriptRepository } from './script-repository';
@@ -15,6 +16,7 @@ export interface Repos {
   scripts: ScriptRepository;
   tags: TagRepository;
   jenkins: JenkinsRepository;
+  executions: ExecutionRepository;
 }
 
 export function createRepos(db: Db): Repos {
@@ -26,6 +28,7 @@ export function createRepos(db: Db): Repos {
     scripts: new ScriptRepository(db),
     tags: new TagRepository(db),
     jenkins: new JenkinsRepository(db),
+    executions: new ExecutionRepository(db),
   };
 }
 

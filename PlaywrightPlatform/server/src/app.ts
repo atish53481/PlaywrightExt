@@ -12,6 +12,7 @@ import { registerAuth } from './plugins/auth';
 import { registerErrorHandling } from './plugins/error-handler';
 import { createRepos, createTransact } from './repositories';
 import { authRoutes } from './routes/auth';
+import { executionRoutes } from './routes/executions';
 import { healthRoutes } from './routes/health';
 import { jenkinsRoutes } from './routes/jenkins';
 import { projectRoutes } from './routes/projects';
@@ -19,6 +20,7 @@ import { scriptRoutes } from './routes/scripts';
 import { userRoutes } from './routes/users';
 import { AuditService } from './services/audit-service';
 import { AuthService } from './services/auth-service';
+import { ExecutionService } from './services/execution-service';
 import { JenkinsService } from './services/jenkins-service';
 import { ProjectService } from './services/project-service';
 import { ScriptService } from './services/script-service';
@@ -29,6 +31,8 @@ export interface AppDeps {
   db: Db;
   /** Absolute path of the built web app. When set, it is served with SPA fallback. */
   webRoot?: string;
+  /** Clock for the time-based rules of runs. Tests pass their own. */
+  now?: () => number;
 }
 
 const REDACT_PATHS = [
@@ -40,7 +44,7 @@ const REDACT_PATHS = [
   '*.secret',
 ];
 
-export async function buildApp({ config, db, webRoot }: AppDeps): Promise<FastifyInstance> {
+export async function buildApp({ config, db, webRoot, now = Date.now }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
     logger:
       config.nodeEnv === 'test'
@@ -79,6 +83,15 @@ export async function buildApp({ config, db, webRoot }: AppDeps): Promise<Fastif
   const projectService = new ProjectService(repos.projects, audit, transact, app.log);
   const scriptService = new ScriptService(repos.scripts, repos.projects, repos.tags, audit, transact, app.log);
   const jenkinsService = new JenkinsService(repos.jenkins, audit, transact, createSecretBox(config.secretsKey), app.log);
+  const executionService = new ExecutionService(
+    repos.executions,
+    repos.scripts,
+    jenkinsService,
+    audit,
+    transact,
+    { publicUrl: config.publicUrl, now },
+    app.log,
+  );
 
   registerAuth(app, auth);
 
@@ -94,6 +107,7 @@ export async function buildApp({ config, db, webRoot }: AppDeps): Promise<Fastif
       await api.register(projectRoutes, { projects: projectService });
       await api.register(scriptRoutes, { scripts: scriptService });
       await api.register(jenkinsRoutes, { jenkins: jenkinsService });
+      await api.register(executionRoutes, { executions: executionService });
     },
     { prefix: '/api' },
   );

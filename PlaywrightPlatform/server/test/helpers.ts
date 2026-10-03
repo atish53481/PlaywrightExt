@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { buildApp } from '../src/app';
+import { buildApp, type AppDeps } from '../src/app';
 import { loadConfig, loadEnvFile, type Config } from '../src/config';
 import { createDb, type Db } from '../src/db';
 import { assertDisposableDatabase } from '../src/migrate';
@@ -30,10 +30,13 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
   });
 }
 
-export async function makeApp(overrides: Record<string, string> = {}): Promise<TestContext> {
+export async function makeApp(
+  overrides: Record<string, string> = {},
+  extra: Partial<Omit<AppDeps, 'config' | 'db'>> = {},
+): Promise<TestContext> {
   const config = testConfig(overrides);
   const db = createDb(config.databaseUrl);
-  const app = await buildApp({ config, db });
+  const app = await buildApp({ config, db, ...extra });
   return { app, db, config };
 }
 
