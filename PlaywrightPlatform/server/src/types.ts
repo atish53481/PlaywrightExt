@@ -37,3 +37,29 @@ export interface Actor {
   email: string;
   ip: string;
 }
+
+export type ProjectStatus = 'ACTIVE' | 'ARCHIVED' | 'DELETED';
+
+export interface Project {
+  id: number;
+  name: string;
+  description: string;
+  status: ProjectStatus;
+  autoUseSkills: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ProjectListItem extends Project {
+  scriptCount: number;
+  lastRunStatus: string | null;
+  lastRunAt: Date | null;
+}
+
+export interface ProjectOverview {
+  totalScripts: number;
+  passedScripts: number;
+  failedScripts: number;
+  notExecuted: number;
+  lastExecutionAt: Date | null;
+}

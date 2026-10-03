@@ -9,13 +9,16 @@ import type { Db } from './db';
 import { registerAuth, SESSION_COOKIE } from './plugins/auth';
 import { registerErrorHandling } from './plugins/error-handler';
 import { AuditRepository } from './repositories/audit-repository';
+import { ProjectRepository } from './repositories/project-repository';
 import { SessionRepository } from './repositories/session-repository';
 import { UserRepository } from './repositories/user-repository';
 import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
+import { projectRoutes } from './routes/projects';
 import { userRoutes } from './routes/users';
 import { AuditService } from './services/audit-service';
 import { AuthService } from './services/auth-service';
+import { ProjectService } from './services/project-service';
 import { UserService } from './services/user-service';
 
 export interface AppDeps {
@@ -66,6 +69,7 @@ export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance
   const audit = new AuditService(new AuditRepository(db), app.log);
   const auth = new AuthService(users, sessions, audit);
   const userService = new UserService(users, sessions, audit, app.log);
+  const projectService = new ProjectService(new ProjectRepository(db), audit, app.log);
 
   registerAuth(app, auth);
 
@@ -78,6 +82,7 @@ export async function buildApp({ config, db }: AppDeps): Promise<FastifyInstance
       });
       await api.register(authRoutes, { auth, config });
       await api.register(userRoutes, { users: userService });
+      await api.register(projectRoutes, { projects: projectService });
     },
     { prefix: '/api' },
   );
