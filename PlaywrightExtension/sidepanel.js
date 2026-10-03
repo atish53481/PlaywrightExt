@@ -6,6 +6,7 @@ import { GeminiProvider } from './providers/gemini-provider.js';
 import { BridgeProvider } from './providers/bridge-provider.js';
 import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
+import { PlatformClient } from './utils/platform-client.js';
 import { PlaywrightCodegen } from './utils/playwright-codegen.js';
 import { TestRunner } from './utils/test-runner.js';
 
@@ -38,6 +39,7 @@ async function init() {
   setupSession();
   setupOrchestrator();
   setupSettings();
+  setupPlatform();
   listenForContentMessages();
 }
 
@@ -814,6 +816,61 @@ function setupOrchestrator() {
     document.getElementById('orch-log').innerHTML = '<span style="color:var(--text3)">Pipeline log...</span>';
     output.innerHTML = '<span class="output-placeholder">Run the pipeline to see results...</span>';
     ['step-planner-status','step-generator-status','step-export-status'].forEach(id => setStepStatus(id, '', 'Waiting'));
+  });
+}
+
+// Settings → Platform: optional sign-in to the Playwright Platform backend.
+// Everything else in the extension works unchanged when this is left empty.
+function setupPlatform() {
+  const urlInput = document.getElementById('platform-url');
+  const emailInput = document.getElementById('platform-email');
+  const passwordInput = document.getElementById('platform-password');
+  const fields = document.getElementById('platform-signin-fields');
+  const signInBtn = document.getElementById('platform-signin');
+  const signOutBtn = document.getElementById('platform-signout');
+  const status = document.getElementById('platform-status');
+  if (!urlInput || !signInBtn || !signOutBtn || !status) return;
+
+  const render = (user, message) => {
+    fields.style.display = user ? 'none' : '';
+    signInBtn.style.display = user ? 'none' : '';
+    signOutBtn.style.display = user ? '' : 'none';
+    urlInput.disabled = Boolean(user);
+    // textContent only: the values come from a server and must never be parsed as HTML.
+    status.textContent = message || (user ? `✅ Signed in as ${user.email} (${user.role})` : 'Not signed in');
+  };
+
+  (async () => {
+    const platform = await Storage.getPlatform();
+    urlInput.value = platform.url || '';
+    render(platform.user);
+    if (!platform.token) return;
+    try {
+      const user = await PlatformClient.me();
+      render(user, user ? '' : 'Session expired — sign in again');
+    } catch (err) {
+      render(platform.user, `⚠️ ${err.message}`);
+    }
+  })();
+
+  signInBtn.addEventListener('click', async () => {
+    signInBtn.disabled = true;
+    status.textContent = 'Signing in…';
+    try {
+      const user = await PlatformClient.login(urlInput.value, emailInput.value.trim(), passwordInput.value);
+      passwordInput.value = '';
+      render(user);
+      showToast('Signed in to platform');
+    } catch (err) {
+      render(null, `❌ ${err.message}`);
+    } finally {
+      signInBtn.disabled = false;
+    }
+  });
+
+  signOutBtn.addEventListener('click', async () => {
+    await PlatformClient.logout();
+    render(null);
   });
 }
 

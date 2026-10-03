@@ -22,6 +22,15 @@ export const Storage = {
     await this.set({ pas_settings: settings });
   },
 
+  async getPlatform() {
+    const data = await this.get('pas_platform');
+    return data.pas_platform || { url: '', token: '', user: null };
+  },
+
+  async savePlatform(platform) {
+    await this.set({ pas_platform: platform });
+  },
+
   async getRecordings() {
     const data = await this.get('pas_recordings');
     return data.pas_recordings || [];

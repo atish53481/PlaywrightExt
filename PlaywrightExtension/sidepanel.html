@@ -535,6 +535,28 @@
             <button class="btn btn-secondary" id="settings-test">🧪 Test Connection</button>
           </div>
           <div id="settings-status" style="font-size:12px;color:var(--text2);padding:4px 0"></div>
+          <div class="settings-section" id="platform-section">
+            <h3>Platform</h3>
+            <div class="form-group" style="margin-top:8px">
+              <label for="platform-url">Platform URL</label>
+              <input type="text" id="platform-url" placeholder="http://localhost:3000">
+            </div>
+            <div id="platform-signin-fields">
+              <div class="form-group" style="margin-top:8px">
+                <label for="platform-email">Email</label>
+                <input type="text" id="platform-email" autocomplete="username">
+              </div>
+              <div class="form-group" style="margin-top:8px">
+                <label for="platform-password">Password</label>
+                <input type="password" id="platform-password" autocomplete="off">
+              </div>
+            </div>
+            <div class="btn-row" style="margin-top:10px">
+              <button class="btn btn-primary" id="platform-signin">Sign in</button>
+              <button class="btn btn-secondary" id="platform-signout" style="display:none">Sign out</button>
+            </div>
+            <div id="platform-status" style="font-size:12px;color:var(--text2);padding:6px 0 0"></div>
+          </div>
           <div class="settings-section">
             <h3>About Playwright AI Studio v1.0.0</h3>
             <div style="font-size:11px;color:var(--text2);line-height:1.8">
