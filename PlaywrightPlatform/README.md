@@ -1,19 +1,23 @@
 # Playwright Platform
 
 Backend, database, and web app for Playwright AI Studio: projects, Playwright scripts with
-version history, users, roles, and audit logging today; skills, Jenkins execution, reports,
-and healing in later releases. The database already contains the tables for all of those.
+version history, runs of those scripts on Jenkins, users, roles, and audit logging today;
+skills, reports, and healing in later releases. The database already contains the tables
+for all of those.
 
 ## Architecture
 
 ```
 web/ (React + Vite)  ──HTTP /api──▶  server/ (Fastify)  ──Knex──▶  PostgreSQL (Docker)
 Chrome extension     ──HTTP /api──▶  routes → services → repositories
+                                              │
+                                              └──HTTP──▶  Jenkins  ──HTTP /api (run token)──▶  server/
 ```
 
 - **routes/** parse and validate HTTP, then call a service.
 - **services/** hold the rules (roles, last-admin protection, audit).
 - **repositories/** are the only code that queries the database.
+- **jenkins/jenkins-client.ts** is the only code that calls Jenkins. The extension never does.
 - The web app sends a session cookie plus a CSRF header; the extension sends a bearer token.
 
 ## Requirements
@@ -92,6 +96,9 @@ Schema changes are always a new file in `server/src/migrations/` added to the li
 | Manage users (Settings → Users) | yes | no | no |
 | View, search, and download scripts and their history | yes | yes | yes |
 | Create, import, edit, duplicate, restore, and delete scripts | yes | yes | no |
+| Browse projects and scripts, and see runs, in the extension | yes | yes | yes |
+| Run a script on Jenkins, and stop a run | yes | yes | no |
+| Set up Jenkins (extension: Settings → Jenkins) | yes | no | no |
 
 ## Scripts
 
@@ -111,9 +118,11 @@ Scripts live in the database, inside a project (project → **Scripts** tab).
 - **Import** accepts `.ts`, `.js`, `.mjs`, and `.cjs` files up to 1 MB.
 - **Delete** hides the script and frees its name; the row and its history stay in the database.
 - **Archived projects** are read-only: their scripts can be viewed and downloaded, not changed.
-- **Run** and **Heal** are shown disabled until the Jenkins and healing releases.
+- **Run** happens in the extension's **Projects** tab (see "Run a script on Jenkins" below).
+  In the web app, **Run** and **Heal** are still shown disabled.
 
-The server stores and returns script content as text. It never executes it.
+The server stores and returns script content as text. It never executes it; a run hands the
+script to a Jenkins build.
 
 ## Connect the extension
 
@@ -125,6 +134,66 @@ Once signed in, the Generator, Recorder, and Orchestrator panels show **💾 Sav
 beside Copy: choose a project and a name, and the script appears in that project's Scripts
 tab. Only TypeScript and JavaScript output can be saved.
 
+## Run a script on Jenkins
+
+Runs are started, watched, and stopped in the extension's side panel. The extension talks
+only to this server; the server talks to Jenkins.
+
+**What Jenkins needs**
+
+- The **Pipeline** plugin (`workflow-aggregator`). Test Connection reports whether it is there.
+- A **Windows** agent with **Node.js 18 or newer** on its PATH. The job uses `bat` steps.
+- Network access from the agent to this server, and to npm and the Playwright browser
+  download.
+- A Jenkins user and an **API token** for it: in Jenkins, open your user menu → **Security**
+  (older versions: **Configure**) → **API Token** → **Add new Token**. The user needs
+  permission to create jobs, build, and cancel builds.
+
+**Set it up once (ADMIN)**
+
+1. In the side panel open **Settings** and sign in under **Platform**.
+2. Under **Jenkins** enter the Jenkins URL, the username, and the API token.
+3. Press **Test Connection**, then **Save**, then **Create Job**. This creates the pipeline
+   job `playwright-platform-run` in Jenkins; pressing it again updates the job's definition.
+
+**Run (ADMIN or USER)**
+
+1. Open the **Projects** tab, a project, and a script.
+2. Press **Run on Jenkins**. The card shows Queued, Running, and then Passed or Failed with
+   the test counts, the duration, and links to the Jenkins build and its Playwright report.
+3. **Stop** aborts a queued or running build. **Recent runs** lists the script's last 10 runs.
+
+**How it works**
+
+- Each run is a row in `test_executions` with the script version that was current when Run
+  was pressed. One script can have one unfinished run at a time.
+- The build downloads that version from this server with a one-time run token, runs it with
+  Playwright on Chromium, and posts the test counts back. The token works only for that run
+  and only until the run ends.
+- Status comes from Jenkins, and is read whenever someone looks at the run. A run nobody
+  looks at keeps its last known status until it is opened, or until Run is pressed again.
+- A passed or failed run sets the script's state, which the project overview counts.
+
+**The address Jenkins calls back**
+
+The build reaches this server at `PLATFORM_PUBLIC_URL`, by default
+`http://127.0.0.1:<APP_PORT>`. That works when Jenkins runs on the same machine. For Jenkins
+on another machine, set `APP_HOST=0.0.0.0` and `PLATFORM_PUBLIC_URL` to an address that
+machine can reach, and put the server behind HTTPS.
+
+**Security**
+
+- The API token is stored encrypted with `SECRETS_ENCRYPTION_KEY` and is never returned by
+  the API, logged, or written to the audit log. If that key changes, enter the token again.
+- A stored script is code. Anyone with the USER role can run code on the Jenkins agent by
+  saving a script and running it. Give that role only to people you would give a shell there.
+
+**Limits**
+
+Windows agents only; one script per run; Chromium only. Every build installs its packages
+and the browser afresh, so a run takes a few minutes. Per-test results, screenshots, and
+traces come with the reports release.
+
 ## Tests
 
 ```bash
@@ -133,7 +202,8 @@ npm run test:e2e     # web: Playwright against a server on :3100 and Vite on :51
 node --test "../PlaywrightExtension/tests/*.test.mjs"   # extension client
 ```
 
-Both suites rebuild `playwright_db_test`. Do not run them at the same time.
+Both suites rebuild `playwright_db_test`. Do not run them at the same time. The server tests
+start their own local stand-in for Jenkins, so no Jenkins is needed to run them.
 
 ## API
 
@@ -165,6 +235,16 @@ All routes are under `/api`. Errors always look like
 | POST | `/scripts/:id/versions/:version/restore` | ADMIN, USER |
 | GET | `/scripts/:id/download` | signed in (optional `?version=`) |
 | GET | `/tags` | signed in |
+| GET | `/jenkins/settings` | signed in (address and username: ADMIN only) |
+| PUT | `/jenkins/settings` | ADMIN |
+| POST | `/jenkins/test` | ADMIN |
+| POST | `/jenkins/job` | ADMIN |
+| POST | `/scripts/:id/run` | ADMIN, USER |
+| GET | `/scripts/:id/executions` | signed in (optional `?limit=`, 1 to 50) |
+| GET | `/executions/:id` | signed in |
+| POST | `/executions/:id/stop` | ADMIN, USER |
+| GET | `/executions/:id/script` | run token (the Jenkins build) |
+| POST | `/executions/:id/result` | run token (the Jenkins build) |
 
 ## Troubleshooting
 
@@ -182,3 +262,10 @@ All routes are under `/api`. Errors always look like
 | A save answers `PAYLOAD_TOO_LARGE` | The request is over 2 MB. Text with many non-English characters can reach that before 1,000,000 characters. Split the script. |
 | A script change answers `PROJECT_NOT_ACTIVE` | The project is archived. Restore it on the Projects page (Status: Archived → Restore). |
 | The extension's Save to Project says to sign in first | Open the side panel's Settings → Platform, enter the platform URL and your credentials, and choose **Sign in**. |
+| Run answers `JENKINS_NOT_CONFIGURED` | Nobody has saved the Jenkins connection. An ADMIN opens the extension's Settings → Jenkins. |
+| Run answers `JENKINS_REJECTED` | The username or API token is wrong, the Jenkins user lacks permission, or the job does not exist. Press Test Connection, then Create Job. |
+| Run answers `JENKINS_UNREACHABLE` | Jenkins is not running or the URL is wrong. Open the Jenkins URL in a browser. |
+| A run ends as ERROR "Jenkins did not start the build" | No agent took the build within 10 minutes. Check Build Executor Status in Jenkins. |
+| A run ends as ERROR "The build failed before the tests ran" | Open the build's console log. Usual causes: Node.js is not on the agent's PATH, the agent cannot reach `PLATFORM_PUBLIC_URL`, or the package or browser download is blocked. |
+| A run stays RUNNING after the build ended | Nobody has looked at it since. Open the script in the Projects tab; the run is read again from Jenkins. |
+| Run or Test Connection answers `INTERNAL_ERROR` after `SECRETS_ENCRYPTION_KEY` changed | The stored Jenkins token can no longer be read. Enter the API token again under Settings → Jenkins and press Save. |

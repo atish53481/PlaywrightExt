@@ -11,7 +11,7 @@ Four sibling projects forming one AI-powered Playwright testing suite. They shar
 | `PlaywrightExtension/` | "Playwright AI Studio" Chrome MV3 extension (side panel UI, AI agents) | Browser, no build step |
 | `PlaywrightBridge/` | Local WebSocket server the extension uses for real Playwright runs + Claude Code CLI as LLM | Node (ESM) |
 | `PlaywrightOrchestrator/` | Standalone multi-agent QA CLI (`pworch`), 15 TypeScript agents | Node + ts-node |
-| `PlaywrightPlatform/` | Test-management backend (Fastify + PostgreSQL) and React web app; the extension signs in to it over HTTP | Node + Docker |
+| `PlaywrightPlatform/` | Test-management backend (Fastify + PostgreSQL) and React web app; the extension signs in to it over HTTP, and it runs stored scripts on Jenkins | Node + Docker |
 
 `PlaywrightOrchestrator/CLAUDE.md` has full detail for that project — read it before working there.
 
@@ -51,7 +51,7 @@ npm test                     # server tests (Vitest, real Postgres)
 npm run test:e2e             # web tests (Playwright)
 npm run typecheck
 ```
-Layering is strict: `routes/` → `services/` → `repositories/`; only repositories query the database; only `web/src/api/` calls `fetch`. See `PlaywrightPlatform/README.md`.
+Layering is strict: `routes/` → `services/` → `repositories/`; only repositories query the database; only `web/src/api/` calls `fetch` in the web app; only `server/src/jenkins/jenkins-client.ts` calls Jenkins. Server tests use a local stand-in for Jenkins (`server/test/jenkins-stub.ts`). See `PlaywrightPlatform/README.md`.
 
 ## Architecture
 
@@ -64,7 +64,7 @@ Layering is strict: `routes/` → `services/` → `repositories/`; only reposito
 - **Recorder pipeline**: `content.js` captures DOM events (a `navigate` action with the current URL is recorded on start, so generated tests begin with `page.goto`) → streams `RECORDING_ACTION` messages to the side panel → `utils/playwright-codegen.js` `actionsToTest()` renders code (`normalizeActions()` collapses per-keystroke `fill` events to the final value). `getBestLocatorText()` in `content.js` must emit valid Playwright selector-engine syntax (`text="..."`, CSS attribute selectors) — its output lands verbatim inside `page.locator('...')`.
 - **Two run paths**, shared by the Generator and Recorder panels via helpers in `sidepanel.js` (`runCodeViaBridge`, `runCodeLive`): Bridge = real `npx playwright test` (headed) with streamed output; Live = `utils/test-runner.js` parses the generated code line-by-line and replays steps on the active tab, with failed steps routable to the Healer panel.
 - **`utils/bridge-client.js`**: WebSocket client for the Bridge (`ws://127.0.0.1:8787`), used for `runCode` (real test runs, streamed output) and `complete` (LLM via Claude Code CLI).
-- **Platform link** (`utils/platform-client.js`, `utils/code-extract.js`): optional sign-in to the Playwright Platform (Settings → Platform, `setupPlatform()` in `sidepanel.js`) and the "💾 Save to Project" buttons in the Generator, Recorder, and Orchestrator panels (`setupSaveToProject()`). Both modules are free of DOM and `chrome.*` calls and are tested with `node --test "PlaywrightExtension/tests/*.test.mjs"`. Text that came from the server is always written with `textContent`. The extension works unchanged when not signed in.
+- **Platform link** (`utils/platform-client.js`, `utils/code-extract.js`, `utils/execution-view.js`): optional sign-in to the Playwright Platform (Settings → Platform, `setupPlatform()` in `sidepanel.js`), the "💾 Save to Project" buttons in the Generator, Recorder, and Orchestrator panels (`setupSaveToProject()`), the **Projects** tab that browses stored scripts and runs them on Jenkins (`setupProjectsPanel()`), and the Jenkins connection form under Settings (`setupJenkinsSettings()`, ADMIN only). The extension never calls Jenkins: every request goes to the platform API through `platform-client.js`. The three `utils/` modules are free of DOM and `chrome.*` calls and are tested with `node --test "PlaywrightExtension/tests/*.test.mjs"`; decisions such as which buttons show and which links are safe live there, not in `sidepanel.js`. Text that came from the server is always written with `textContent`. The extension works unchanged when not signed in.
 
 ### Bridge (PlaywrightBridge)
 Single file, `server.js`. Protocol: JSON `{id, cmd, payload}` messages — `ping`, `runCode` (writes `tests/bridge.spec.ts`, spawns `npx playwright test` headed, streams stdout), `complete` (pipes prompt to `claude -p`), `stop`. Binds 127.0.0.1 only — it executes arbitrary Playwright code and shells out to `claude`, so never expose the port.
@@ -76,3 +76,4 @@ Separate multi-agent framework — event bus + singleton registry + `Orchestrato
 
 - The Extension's agent/provider names (planner, generator, healer...) mirror the Orchestrator's agents but the implementations are independent — a change in one does not affect the other.
 - Bridge protocol changes must be kept in sync on both sides: `PlaywrightBridge/server.js` and `PlaywrightExtension/utils/bridge-client.js`.
+- Platform API changes must be kept in sync on both sides: the routes in `PlaywrightPlatform/server/src/routes/` and `PlaywrightExtension/utils/platform-client.js`.
