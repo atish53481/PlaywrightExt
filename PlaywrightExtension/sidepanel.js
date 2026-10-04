@@ -14,6 +14,8 @@ import {
 import { extractCode, looksLikeCode, pickFixedCode, sectionAfter, toSingleFile } from './utils/code-extract.js';
 import { diffStats, lineDiff } from './utils/line-diff.js';
 import { withSkills } from './utils/skill-context.js';
+import { MAX_FILE_BYTES, readUploadedFile } from './utils/file-text.js';
+import { MAX_HEALS, runUntilPassing } from './utils/heal-run.js';
 import { PlaywrightCodegen } from './utils/playwright-codegen.js';
 import { TestRunner } from './utils/test-runner.js';
 
@@ -22,6 +24,12 @@ let orchestrator = new Orchestrator(new MockProvider());
 let currentProvider = 'mock';
 let lastOutput = '';
 let recorderActions = [];
+// The tab being recorded, or null. A page that loads in it asks whether to go on recording.
+let recorderTabId = null;
+// The tabs opened from the recorded tab, in the order they opened: the first is page1 in the test.
+let recorderPopups = [];
+let recorderPaused = false;
+const noteRecorderTab = () => chrome.runtime.sendMessage({ type: 'GET_ACTIVE_TAB' }, (tab) => { recorderTabId = tab?.id ?? null; recorderPopups = []; });
 let recorderInterval = null;
 let sessionInterval = null;
 let sessionStartTime = null;
@@ -238,14 +246,58 @@ function updateProvider(providerName, apiKey = '', model = '') {
   }
 }
 
+// The "Upload File" row under an input box (`prefix` is "planner", "gen", or "orch"). A file whose text
+// can be read is added to the box, where it can be seen and changed; a PDF or an image is kept
+// and sent to the model as it is. Returns { attachments(), clear() }.
+function setupFileUpload(prefix, textarea) {
+  const input = document.getElementById(`${prefix}-file`);
+  const note = document.getElementById(`${prefix}-file-note`);
+  const remove = document.getElementById(`${prefix}-file-remove`);
+  let attached = null;
+
+  const draw = (message = '') => {
+    note.textContent = attached ? `📎 ${attached.name} — sent to the model with the request` : message;
+    remove.style.display = attached ? '' : 'none';
+  };
+
+  document.getElementById(`${prefix}-upload`)?.addEventListener('click', () => input.click());
+  input?.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    try {
+      // Checked before the file is read into memory.
+      if (file.size > MAX_FILE_BYTES) throw new Error(`"${file.name}" is larger than 10 MB.`);
+      const read = await readUploadedFile({ name: file.name, type: file.type, bytes: new Uint8Array(await file.arrayBuffer()) });
+      if (read.kind === 'attachment') {
+        attached = read.attachment;
+        draw();
+      } else {
+        textarea.value = textarea.value.trim() ? `${textarea.value.trimEnd()}\n\n${read.text}` : read.text;
+        draw(`✅ Added the text of ${file.name}${read.truncated ? ' (its first 200,000 characters)' : ''}`);
+      }
+    } catch (e) {
+      draw(`❌ ${e.message}`);
+    }
+  });
+  remove?.addEventListener('click', () => { attached = null; draw(); });
+
+  return {
+    attachments: () => (attached ? [attached] : []),
+    clear: () => { attached = null; draw(); },
+  };
+}
+
 // ---- 1. TEST PLANNER ----
 function setupPlanner() {
   const runBtn = document.getElementById('planner-run');
   const output = document.getElementById('planner-output');
+  const upload = setupFileUpload('planner', document.getElementById('planner-input'));
 
   runBtn?.addEventListener('click', async () => {
     const text = document.getElementById('planner-input')?.value?.trim();
-    if (!text) { showToast('Enter requirements first'); return; }
+    const attachments = upload.attachments();
+    if (!text && attachments.length === 0) { showToast('Enter requirements or upload a file first'); return; }
     const inputType = document.getElementById('planner-input-type')?.value;
     runBtn.disabled = true;
     showLoading(output, '🎭 planner agent exploring requirements...');
@@ -255,7 +307,7 @@ function setupPlanner() {
         chrome.runtime.sendMessage({ type: 'GET_ACTIVE_TAB' }, tab =>
           resolve(tab?.url ? { url: tab.url, title: tab.title || '' } : null));
       });
-      const result = await orchestrator.dispatch('planner', { text, inputType, pageContext });
+      const result = await orchestrator.dispatch('planner', { text, inputType, pageContext, attachments });
       setOutput(output, result);
     } catch(e) {
       output.textContent = `Error: ${e.message}`;
@@ -277,6 +329,7 @@ function setupPlanner() {
 
   document.getElementById('planner-clear')?.addEventListener('click', () => {
     document.getElementById('planner-input').value = '';
+    upload.clear();
     document.getElementById('planner-output').innerHTML = '<span class="output-placeholder">Test plan will appear here...</span>';
   });
 }
@@ -285,10 +338,12 @@ function setupPlanner() {
 function setupGenerator() {
   const runBtn = document.getElementById('gen-run');
   const output = document.getElementById('gen-output');
+  const upload = setupFileUpload('gen', document.getElementById('gen-input'));
 
   runBtn?.addEventListener('click', async () => {
     const testPlan = document.getElementById('gen-input')?.value?.trim();
-    if (!testPlan) { showToast('Enter a test plan or requirements first'); return; }
+    const attachments = upload.attachments();
+    if (!testPlan && attachments.length === 0) { showToast('Enter a test plan or requirements, or upload a file, first'); return; }
     const language = document.getElementById('gen-language')?.value;
     const framework = document.getElementById('gen-framework')?.value;
     const options = {
@@ -301,7 +356,7 @@ function setupGenerator() {
     runBtn.disabled = true;
     showLoading(output, `Test Generator creating ${language} ${framework} code...`);
     try {
-      const result = await orchestrator.dispatch('generator', { testPlan, language, framework, options });
+      const result = await orchestrator.dispatch('generator', { testPlan, language, framework, options, attachments });
       setOutput(output, result);
     } catch(e) {
       output.textContent = `Error: ${e.message}`;
@@ -320,6 +375,7 @@ function setupGenerator() {
 
   document.getElementById('gen-clear')?.addEventListener('click', () => {
     document.getElementById('gen-input').value = '';
+    upload.clear();
     document.getElementById('gen-output').innerHTML = '<span class="output-placeholder">Playwright code will appear here...</span>';
     const runSection = document.getElementById('gen-run-section');
     if (runSection) runSection.style.display = 'none';
@@ -334,7 +390,9 @@ function setupGenerator() {
       section: document.getElementById('gen-run-section'),
       results: document.getElementById('gen-run-results'),
       summary: document.getElementById('gen-run-summary'),
-      btn: bridgeBtn
+      btn: bridgeBtn,
+      // The test that passed is the one the code box holds.
+      onPassed: (passed) => { document.getElementById('gen-output').textContent = passed; lastOutput = passed; },
     });
   });
 
@@ -355,23 +413,82 @@ function setupGenerator() {
 }
 
 // ---- Shared run helpers (Generator + Recorder panels) ----
-async function runCodeViaBridge(code, { section, results, summary, btn }) {
+// Runs the code with the real Playwright runner. A run that fails is given to the healer,
+// with what the runner printed, and the healer's fix is run, twice at most. `onPassed(code)`
+// is told the code that passed, exactly as it was run: the healer's fix, or the given code
+// as one file.
+async function runCodeViaBridge(code, { section, results, summary, btn, onPassed, agentFirst = false }) {
   section.style.display = 'block';
   results.innerHTML = '<pre style="margin:0;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>';
   const log = results.querySelector('pre');
+  const say = (text) => { log.textContent += text; results.scrollTop = results.scrollHeight; };
   summary.textContent = '🌉 connecting to bridge...';
   btn.disabled = true;
 
+  // Two healers. The quick one is the chosen AI provider, given the runner's output and
+  // Playwright's snapshot of the page; the mock provider answers every request with the same
+  // sample and cannot do it. The thorough one is Playwright's own healer agent, which the
+  // bridge runs through Playwright MCP: it debugs the test in a real browser and takes a minute or two.
+  const quick = currentProvider !== 'mock';
+  const agent = await BridgeClient.hasAgents().catch(() => false);
+  const canHeal = quick || agent;
+  if (agentFirst) {
+    say(agent
+      ? '🎭 Playwright agent ready: if the test fails, it debugs the test in a real browser and its fix is run again.\n'
+      : `⚠ The Playwright agents are not installed in the bridge, so ${quick ? 'the AI provider heals a failed run instead' : 'a failed run is not healed'}. To install: cd PlaywrightBridge, then npx playwright init-agents --loop=claude\n`);
+  }
+  const healWith = async (source, error, context, attempt) => {
+    // The quick healer fixes first; what it cannot fix goes to the agent. With `agentFirst`
+    // (a recorded test) the agent fixes every time: it sees the page, where the quick healer reads about it.
+    const byAgent = agent && (agentFirst || attempt > 1 || !quick);
+    if (!byAgent) return orchestrator.dispatch('healer', { brokenCode: source, errorMessage: error, context });
+    say('🎭 Playwright healer agent (Playwright MCP) is debugging the test in a real browser. This takes a minute or two.\n');
+    const healed = await BridgeClient.agentHeal(source, (msg) => { if (msg.type === 'status') say(msg.message || ''); });
+    if (healed.summary) say(`\n${healed.summary}\n`);
+    return `\`\`\`typescript\n${healed.code}\n\`\`\``;
+  };
   try {
-    const res = await BridgeClient.runCode(code, (msg) => {
-      if (msg.type === 'status' || msg.type === 'output') {
-        log.textContent += msg.message || msg.line || '';
-        results.scrollTop = results.scrollHeight;
-        summary.textContent = '🏃 Playwright running (headed)...';
-      }
+    const result = await runUntilPassing({
+      code,
+      run: async (source) => {
+        let output = '';
+        const res = await BridgeClient.runCode(source, (msg) => {
+          if (msg.type !== 'status' && msg.type !== 'output') return;
+          const text = msg.message || msg.line || '';
+          if (msg.type === 'output') output += text;
+          say(text);
+        });
+        return { output, exitCode: res.exitCode, pageContext: res.errorContext || '' };
+      },
+      heal: canHeal ? healWith : null,
+      onEvent: ({ type, attempt }) => {
+        if (type === 'run') {
+          if (attempt > 1) say(`\n──── ▶ Running the healer's fix (run ${attempt}) ────\n`);
+          summary.textContent = attempt > 1 ? `🏃 Running the healer's fix (run ${attempt})...` : '🏃 Playwright running (headed)...';
+        } else {
+          say(`\n──── 🔧 Run ${attempt} failed: the healer is fixing the test (fix ${attempt} of ${MAX_HEALS}) ────\n`);
+          summary.textContent = `🔧 Run failed — healer fixing the test (fix ${attempt} of ${MAX_HEALS})...`;
+        }
+      },
     });
-    summary.textContent = res.passed ? '✅ Playwright run PASSED' : `❌ Playwright run FAILED (exit ${res.exitCode})`;
-    showToast(res.passed ? 'Real Playwright run passed!' : 'Run failed — see output');
+
+    const fixes = `${result.heals} fix${result.heals === 1 ? '' : 'es'}`;
+    if (result.outcome === 'passed') {
+      summary.textContent = result.heals > 0 ? `✅ PASSED after the healer fixed the test (${fixes})` : '✅ Playwright run PASSED';
+      onPassed?.(result.code);
+      showToast(result.heals > 0 ? 'Healed and passing — the code box holds the fixed test' : 'Real Playwright run passed — the code box holds the test that passed');
+    } else if (result.outcome === 'skipped') {
+      summary.textContent = result.heals > 0
+        ? '⏭️ NOT RUN — the healer switched the test off: it judged the application, not the test, to be at fault'
+        : '⏭️ NOT RUN — every test in the file is skipped';
+      if (result.heals > 0) say('\nThe healer\'s version, which skips the test, was not put in the code box.\n');
+      showToast('Nothing ran — see output');
+    } else {
+      const why = result.reason
+        || (result.heals > 0 ? `still failing after ${fixes} by the healer` : canHeal ? '' : 'to have a failed run healed, choose a real AI provider in Settings, or install the Playwright agents in the bridge');
+      summary.textContent = `❌ Playwright run FAILED${why ? ` — ${why}` : ''}`;
+      showToast('Run failed — see output');
+    }
   } catch (e) {
     summary.textContent = '🌉 bridge unavailable';
     log.textContent = `${e.message}\n\nSetup (once):\n  cd PlaywrightExt/PlaywrightBridge\n  npm run setup\n\nThen keep running:\n  npm start`;
@@ -617,6 +734,7 @@ function setupRecorder() {
       if (resp?.error || !resp?.ok) {
         // Recording never started on the page — show why instead of a fake state
         isRecording = false;
+        recorderTabId = null;
         clearInterval(recorderInterval);
         dot.className = 'rec-dot';
         statusTxt.textContent = `❌ ${resp?.error || 'Page did not respond — refresh the tab and retry'}`;
@@ -628,6 +746,8 @@ function setupRecorder() {
       statusTxt.textContent = 'Recording...';
     });
     startBtn.disabled = true; pauseBtn.disabled = false; stopBtn.disabled = false;
+    recorderPaused = false;
+    noteRecorderTab();
     renderActionList();
     recorderInterval = setInterval(() => { updateRecOutput(); }, 2000);
   });
@@ -646,13 +766,16 @@ function setupRecorder() {
       statusTxt.textContent = 'Recording...';
       pauseBtn.textContent = '⏸ Pause';
     }
+    recorderPaused = !isRecording;
   });
 
   stopBtn?.addEventListener('click', () => {
     isRecording = false;
+    recorderTabId = null;
     clearInterval(recorderInterval);
-    chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'STOP_RECORDING' } }, (resp) => {
-      if (resp?.actions) recorderActions = resp.actions;
+    // The steps are the ones each page reported as they happened. The page that answers here
+    // knows only its own: a recording that went through several pages would lose the rest.
+    chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'STOP_RECORDING' } }, () => {
       renderActionList();
       updateRecOutput();
     });
@@ -666,11 +789,28 @@ function setupRecorder() {
     if (recorderActions.length === 0) { showToast('Record some actions first'); return; }
     const lang = document.getElementById('rec-language')?.value;
     const name = document.getElementById('rec-test-name')?.value;
+    if (isEditingCode) { showToast('Save edits first (✔ Save)'); return; }
+    // The mock provider answers every request with the same sample, which is not this test.
+    if (currentProvider === 'mock') { showToast('AI Enhance needs a real AI provider — choose one in Settings'); return; }
+    // The code in the box is the one test there is. An edited, healed, or passed test is what
+    // gets tidied, not the recording it came from, and it stays when the model has no test to give.
+    const working = output.textContent || '';
+    const keep = (why) => { output.textContent = working; showToast(why); };
     showLoading(output, 'AI enhancing recorded code...');
     try {
-      const result = await orchestrator.dispatch('recorder', { actions: recorderActions, language: lang, testName: name });
-      setOutput(output, result);
-    } catch(e) { output.textContent = `Error: ${e.message}`; }
+      const result = await orchestrator.dispatch('recorder', {
+        actions: recorderActions, language: lang, testName: name,
+        pageObjects: Boolean(document.getElementById('rec-pom')?.checked),
+        code: userEditedCode ? working : '',
+      });
+      // The box holds the test itself, as one file, so both Run buttons run what is shown.
+      const code = toSingleFile(extractCode(result)).trim();
+      if (!/\btest(\.\w+)?\(/.test(code) || !code.includes('page.')) { keep('AI Enhance returned no test — your code is kept'); return; }
+      output.textContent = code;
+      lastOutput = code;
+      // Kept: recording again, not a later redraw, replaces it.
+      userEditedCode = true;
+    } catch(e) { keep(`AI Enhance failed — your code is kept (${e.message})`); }
   });
 
   // ---- Edit / Save recorded code ----
@@ -706,10 +846,6 @@ function setupRecorder() {
     if (isEditingCode) { showToast('Save edits first (✔ Save)'); return null; }
     const code = output?.textContent || '';
     if (!code || code.includes('will generate code here')) { showToast('Record some actions first'); return null; }
-    if ((document.getElementById('rec-language')?.value || 'typescript') === 'python') {
-      showToast('Run supports TypeScript/JavaScript only');
-      return null;
-    }
     return code;
   }
 
@@ -721,7 +857,11 @@ function setupRecorder() {
       section: document.getElementById('rec-run-section'),
       results: document.getElementById('rec-run-results'),
       summary: document.getElementById('rec-run-summary'),
-      btn: recBridgeBtn
+      btn: recBridgeBtn,
+      // The test that passed is the one the code box holds, and is kept like a saved edit.
+      onPassed: (passed) => { output.textContent = passed; lastOutput = passed; userEditedCode = true; },
+      // A recorded test is fixed by the Playwright agent, which works in a real browser.
+      agentFirst: true,
     });
   });
 
@@ -927,6 +1067,8 @@ function setupSession() {
     statusTxt.textContent = 'Capturing session...';
     startBtn.disabled = true; stopBtn.disabled = false;
     chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'START_RECORDING' } });
+    recorderPaused = false;
+    noteRecorderTab();
     sessionInterval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - sessionStartTime) / 1000);
       document.getElementById('sess-duration').textContent = elapsed + 's';
@@ -935,6 +1077,7 @@ function setupSession() {
 
   stopBtn?.addEventListener('click', () => {
     isSessionCapturing = false;
+    recorderTabId = null;
     clearInterval(sessionInterval);
     chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'STOP_RECORDING' } }, (resp) => {
       if (resp?.actions) { sessionActionCount = resp.actions.length; }
@@ -954,16 +1097,30 @@ function setupSession() {
   });
 
   document.getElementById('sess-copy')?.addEventListener('click', () => copyText(output.textContent));
+  document.getElementById('sess-clear')?.addEventListener('click', () => {
+    // A capture in progress keeps its counters and status; only the generated test is cleared.
+    if (!isSessionCapturing) {
+      sessionActionCount = 0; sessionRequestCount = 0;
+      document.getElementById('sess-actions').textContent = '0';
+      document.getElementById('sess-requests').textContent = '0';
+      document.getElementById('sess-duration').textContent = '0s';
+      statusTxt.textContent = 'Ready';
+    }
+    output.innerHTML = '<span class="output-placeholder">Start a browser session to generate Playwright tests...</span>';
+  });
 }
 
 // ---- 10. ORCHESTRATOR ----
 function setupOrchestrator() {
   const runBtn = document.getElementById('orch-run');
   const output = document.getElementById('orch-output');
+  const upload = setupFileUpload('orch', document.getElementById('orch-input'));
 
   runBtn?.addEventListener('click', async () => {
     const requirement = document.getElementById('orch-input')?.value?.trim();
-    if (!requirement) { showToast('Enter requirements first'); return; }
+    // An uploaded PDF or image goes to the planner; the generator works from the plan it writes.
+    const attachments = upload.attachments();
+    if (!requirement && attachments.length === 0) { showToast('Enter requirements or upload a file first'); return; }
     const language = document.getElementById('orch-language')?.value || 'typescript';
 
     runBtn.disabled = true;
@@ -978,7 +1135,7 @@ function setupOrchestrator() {
     appendOrcLog('🚀 Pipeline started');
     try {
       appendOrcLog('📋 Test Planner analyzing requirements...');
-      const plan = await orchestrator.dispatch('planner', { text: requirement, inputType: 'feature description' });
+      const plan = await orchestrator.dispatch('planner', { text: requirement, inputType: 'feature description', attachments });
       setStepStatus('step-planner-status', 'done', '✅ Done');
       appendOrcLog('✅ Test plan generated');
 
@@ -1002,6 +1159,7 @@ function setupOrchestrator() {
   document.getElementById('orch-copy')?.addEventListener('click', () => copyText(output.textContent));
   document.getElementById('orch-clear')?.addEventListener('click', () => {
     document.getElementById('orch-input').value = '';
+    upload.clear();
     document.getElementById('orch-log').innerHTML = '<span style="color:var(--text3)">Pipeline log...</span>';
     output.innerHTML = '<span class="output-placeholder">Run the pipeline to see results...</span>';
     ['step-planner-status','step-generator-status','step-export-status'].forEach(id => setStepStatus(id, '', 'Waiting'));
@@ -1490,8 +1648,28 @@ function setupProjectsPanel() {
       }
       if (turn !== state.turn) return;
       renderBatch();
+      loadBatchReports();
       watchBatch();
     }, POLL_MS);
+  }
+
+  // Asks the platform where the reports of each finished run of the batch open, once per run,
+  // so its row offers the Playwright and Allure reports as the status card of a script does.
+  async function loadBatchReports() {
+    const turn = state.turn;
+    for (const entry of state.batch) {
+      const run = entry.execution;
+      if (!run || !isFinal(run.status) || !run.buildNumber || entry.reports) continue;
+      try {
+        const { reports, platformUrl } = await PlatformClient.getReportLinks(run.id);
+        entry.reports = reportLinks(reports, platformUrl);
+      } catch {
+        // The row keeps the link to the run's own page.
+        continue;
+      }
+      if (turn !== state.turn) return;
+      renderBatch();
+    }
   }
 
   // Deleting the ticked scripts: asked once more in the panel, then one after another, so a
@@ -2622,12 +2800,30 @@ function setupSettings() {
 
 // ---- Content Script Message Listener ----
 function listenForContentMessages() {
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // A page that has just loaded asks whether its tab is being recorded.
+    if (message.type === 'RECORDER_STATE') {
+      sendResponse({
+        recording: recorderTabId !== null && (sender.tab?.id === recorderTabId || recorderPopups.includes(sender.tab?.id)),
+        paused: recorderPaused,
+        count: recorderActions.length,
+      });
+      return;
+    }
+    // A tab opened from a tab that is being recorded is recorded too: the step before opened it.
+    if (message.type === 'TAB_OPENED' && recorderTabId !== null && !recorderPaused
+      && (message.openerTabId === recorderTabId || recorderPopups.includes(message.openerTabId))) {
+      const from = recorderPopups.indexOf(message.openerTabId) + 1;
+      recorderPopups.push(message.tabId);
+      recorderActions.push({ type: 'popup', opened: recorderPopups.length, ...(from > 0 ? { page: from } : {}), ts: Date.now() });
+    }
     if (message.type === 'ELEMENT_INSPECTED') {
       renderInspectorResults(message.elementInfo);
     }
     if (message.type === 'RECORDING_ACTION') {
-      recorderActions.push(message.action);
+      // A step in a tab opened from the recorded one belongs to that tab's page (page1, page2).
+      const page = recorderPopups.indexOf(sender.tab?.id) + 1;
+      recorderActions.push(page > 0 ? { ...message.action, page } : message.action);
       const countTxt = document.getElementById('rec-count');
       if (countTxt) countTxt.textContent = `${recorderActions.length} actions`;
     }

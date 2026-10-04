@@ -127,8 +127,8 @@ export function batchReportLink(path, platformUrl) {
 }
 
 // One run as a row of a list: { label, className, detail, links: [{ label, href }] }.
-// `entry` is { execution, error }: the run, or why it could not be started. Used for the
-// run history of a script and for scripts run together.
+// `entry` is { execution, error, reports }: the run, or why it could not be started, and its
+// report links once known. Used for the run history of a script and for scripts run together.
 export function runRow(entry, { platformUrl = '', jenkinsBaseUrl = '', withVersion = false, withId = true, when = '' } = {}) {
   const run = entry?.execution;
   if (!run) {
@@ -144,9 +144,11 @@ export function runRow(entry, { platformUrl = '', jenkinsBaseUrl = '', withVersi
   else if (withVersion) parts.push(`v${run.scriptVersion}`);
   if (run.buildNumber) parts.push(`build ${run.buildNumber}`);
   parts.push(countsText(run) || (isFinal(run.status) ? 'no test ran' : ''), durationText(run.durationMs), when);
-  const links = [];
+  // `entry.reports` is what reportLinks made of the platform's answer: the run's page and each
+  // report the build archived. Until it is known, the row offers the run's page alone.
+  const links = Array.isArray(entry.reports) ? [...entry.reports] : [];
   const report = runReportLink(run, platformUrl);
-  if (report) links.push({ label: 'Run report', href: report });
+  if (links.length === 0 && report) links.push({ label: 'Run report', href: report });
   const build = safeJenkinsLink(run.buildUrl, jenkinsBaseUrl);
   if (build) links.push({ label: 'Jenkins', href: build });
   return { label: status.label, className: status.className, detail: parts.filter(Boolean).join(' · '), links };

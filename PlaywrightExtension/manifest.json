@@ -12,7 +12,9 @@
     "debugger",
     "webNavigation"
   ],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -31,10 +33,25 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "page-hooks.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle",
-      "all_frames": false
+      "all_frames": true
     }
   ],
   "icons": {
@@ -45,8 +62,14 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["agents/*", "providers/*", "utils/*"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "agents/*",
+        "providers/*",
+        "utils/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

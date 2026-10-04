@@ -1,4 +1,5 @@
 import { BaseAgent } from './base-agent.js';
+import { attachmentsNote } from '../utils/file-text.js';
 
 const LANG_TEMPLATES = {
   typescript: { ext: 'ts', import: `import { test, expect } from '@playwright/test';` },
@@ -36,7 +37,8 @@ Locator rules:
 Output complete, runnable code files. If a step cannot be automated, add a // TODO(healer): comment instead of inventing selectors.`;
   }
 
-  async run({ testPlan, language = 'typescript', framework = 'pom', options = {} }) {
+  // `attachments` are uploaded files the model reads itself (a PDF, an image): see utils/file-text.js.
+  async run({ testPlan, language = 'typescript', framework = 'pom', options = {}, attachments = [] }) {
     const systemPrompt = this.buildSystemPrompt(language, framework);
     const prompt = `Transform this test plan (specs/*.md) into a complete Playwright ${language} test suite.
 
@@ -45,11 +47,12 @@ Output complete, runnable code files. If a step cannot be automated, add a // TO
 **Generate:** ${options.generatePOM !== false ? 'Page Objects + ' : ''}Test Files${options.fixtures ? ' + Fixtures' : ''}${options.utilities ? ' + Utilities' : ''}
 
 **Test Plan (specs/*.md):**
-${testPlan}
+${testPlan || '(nothing typed — the test plan or requirements are in the attached file)'}
+${attachmentsNote(attachments)}
 
 Output the tests/ and pages/ files with // File: headers, one test per scenario, seed setup in beforeEach, web-first assertions.`;
 
-    const result = await this.provider.complete({ system: systemPrompt, prompt, maxTokens: 8000 });
+    const result = await this.provider.complete({ system: systemPrompt, prompt, maxTokens: 8000, attachments });
     this.record({ language, framework }, result);
     return result;
   }

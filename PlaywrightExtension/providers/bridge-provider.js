@@ -10,9 +10,9 @@ export class BridgeProvider extends AIProvider {
     this.name = 'bridge';
   }
 
-  async complete({ system, prompt, maxTokens = 8000 }) {
+  async complete({ system, prompt, maxTokens = 8000, attachments = [] }) {
     try {
-      return await BridgeClient.complete({ system, prompt });
+      return await BridgeClient.complete({ system, prompt, attachments });
     } catch (e) {
       throw new Error(`Bridge LLM failed: ${e.message}`);
     }

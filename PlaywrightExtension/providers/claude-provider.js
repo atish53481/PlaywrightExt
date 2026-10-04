@@ -8,8 +8,17 @@ export class ClaudeProvider extends AIProvider {
     this.apiUrl = 'https://api.anthropic.com/v1/messages';
   }
 
-  async complete({ system, prompt, maxTokens = 4000 }) {
+  async complete({ system, prompt, maxTokens = 4000, attachments = [] }) {
     if (!this.isConfigured()) throw new Error('Claude API key not configured');
+
+    // Uploaded files the model reads itself go before the text: a PDF as a document, the rest as images.
+    const content = attachments.length === 0 ? prompt : [
+      ...attachments.map((file) => ({
+        type: file.mediaType === 'application/pdf' ? 'document' : 'image',
+        source: { type: 'base64', media_type: file.mediaType, data: file.base64 },
+      })),
+      { type: 'text', text: prompt },
+    ];
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -23,7 +32,7 @@ export class ClaudeProvider extends AIProvider {
         model: this.model,
         max_tokens: maxTokens,
         system: system,
-        messages: [{ role: 'user', content: prompt }]
+        messages: [{ role: 'user', content }]
       })
     });
 

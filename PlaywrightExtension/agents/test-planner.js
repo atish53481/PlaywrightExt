@@ -1,4 +1,5 @@
 import { BaseAgent } from './base-agent.js';
+import { attachmentsNote } from '../utils/file-text.js';
 
 // Maps to the official Playwright 🎭 planner agent (playwright.dev/docs/test-agents):
 // explores the app context and produces a human-readable Markdown test plan (specs/*.md)
@@ -72,18 +73,20 @@ Rules:
 - Prefer observable expected results (visible text, URL, element state)`;
   }
 
-  async run({ text, inputType = 'feature', pageContext = null, options = {} }) {
+  // `attachments` are uploaded files the model reads itself (a PDF, an image): see utils/file-text.js.
+  async run({ text, inputType = 'feature', pageContext = null, options = {}, attachments = [] }) {
     const templates = await loadTemplates();
     const prompt = `Produce a Playwright test plan for the following ${inputType}, following the template in the system prompt.
 
 **Input Type:** ${inputType}
 ${pageContext ? `**Live Page Context (seed):** URL: ${pageContext.url} — Title: "${pageContext.title}"` : ''}
 **Content:**
-${text}
+${text || '(nothing typed — the content is in the attached file)'}
+${attachmentsNote(attachments)}
 
 Remember: output a single Markdown document the generator agent can transform 1:1 into tests. Fill every template placeholder with concrete content.`;
 
-    const result = await this.provider.complete({ system: this.buildSystemPrompt(templates), prompt, maxTokens: 6000 });
+    const result = await this.provider.complete({ system: this.buildSystemPrompt(templates), prompt, maxTokens: 6000, attachments });
     this.record({ text, inputType }, result);
     return result;
   }

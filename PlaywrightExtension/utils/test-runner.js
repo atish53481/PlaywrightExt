@@ -14,14 +14,27 @@ function firstString(src) {
 
 // Parses a locator expression like: page.getByRole('button', { name: 'Login' })
 function parseLocator(expr) {
-  const m = expr.match(new RegExp(`\\.(getByRole|getByLabel|getByText|getByPlaceholder|getByTestId|locator)\\((${ARGS})\\)`));
-  if (!m) return null;
-  const method = m[1];
-  const args = m[2];
-  const value = firstString(args);
-  if (value === null) return null;
-  const nameMatch = args.match(new RegExp(`name:\\s*(${STRING})`));
-  return { method, value, name: nameMatch ? firstString(nameMatch[1]) : null, raw: expr.trim() };
+  // One part of a chain: the call, then .filter({ hasText }) and .first() / .last() / .nth(n) when they follow it.
+  const PART = new RegExp(`\\.(getByRole|getByLabel|getByText|getByPlaceholder|getByAltText|getByTitle|getByTestId|locator)\\((${ARGS})\\)`
+    + `(?:\\s*\\.filter\\(\\{\\s*hasText:\\s*(${STRING})\\s*\\}\\))?(?:\\s*\\.(first|last|nth)\\(\\s*(\\d*)\\s*\\))?`, 'g');
+  const parts = [];
+  for (const m of expr.matchAll(PART)) {
+    const args = m[2];
+    const value = firstString(args);
+    if (value === null) return null;
+    const nameMatch = args.match(new RegExp(`name:\\s*(${STRING})`));
+    parts.push({
+      method: m[1], value, name: nameMatch ? firstString(nameMatch[1]) : null,
+      // getByRole('button', { name: 'Save', exact: true }) asks for the whole name, not a part of it.
+      exact: /\bexact:\s*true\b/.test(args),
+      hasText: m[3] ? firstString(m[3]) : null,
+      // Which of several matches: null for the first there is, a number for .first() and .nth(n), 'last'.
+      pick: !m[4] ? null : m[4] === 'last' ? 'last' : m[4] === 'nth' ? Number(m[5]) : 0,
+    });
+  }
+  if (parts.length === 0) return null;
+  // The first part, with the parts looked for inside it: page.getByRole('row').getByRole('button').
+  return { ...parts[0], then: parts.slice(1), raw: expr.trim() };
 }
 
 export const TestRunner = {
@@ -42,6 +55,18 @@ export const TestRunner = {
 
       if ((m = line.match(/page\.goto\(\s*['"`]([^'"`]+)/))) {
         steps.push({ action: 'goto', url: m[1], label: `Navigate to ${m[1]}` });
+        continue;
+      }
+
+      // A frame, a new tab, and the answer to a dialog are out of reach of a script in the page.
+      if ((m = line.match(/\.(frameLocator|waitForEvent)\(|\b(page\d+)\.|\.once\('dialog'/))) {
+        steps.push({ action: 'skip', label: `${line.slice(0, 70)} — runs only with the real Playwright runner (Run via Playwright)`, reason: 'needs-playwright' });
+        continue;
+      }
+
+      // expect(page).toHaveURL(/\/dashboard/): the address is matched against the pattern.
+      if ((m = line.match(/expect\(\s*page\s*\)\.(not\.)?toHaveURL\(\s*\/((?:\\.|[^/\\\n])+)\/([a-z]*)\s*\)/))) {
+        steps.push({ action: 'assertURL', pattern: m[2], flags: m[3], url: m[2], negated: !!m[1], label: `Expect URL ${m[1] ? 'NOT ' : ''}to match /${m[2]}/` });
         continue;
       }
 
@@ -78,6 +103,12 @@ export const TestRunner = {
           });
           continue;
         }
+      }
+
+      // A real drag, and choosing a file, cannot be done by a script in the page.
+      if ((m = line.match(/\.(dragTo|setInputFiles)\(/))) {
+        steps.push({ action: 'skip', label: `${m[1]}(...) — runs only with the real Playwright runner (Run via Playwright)`, reason: 'needs-playwright' });
+        continue;
       }
 
       // Unresolvable calls (page objects like loginPage.login(...)) — report, don't fail
@@ -138,8 +169,15 @@ export const TestRunner = {
           await new Promise(r => setTimeout(r, 800));
           await this.waitForPageReady();
         } else if (step.action === 'assertURL') {
-          const tab = await this.getActiveTab();
-          const matches = tab?.url?.includes(step.url);
+          // The page may still be on its way there: the address is looked at again for a few seconds.
+          const holds = (url) => (step.pattern ? new RegExp(step.pattern, step.flags).test(url || '') : Boolean(url?.includes(step.url)));
+          const deadline = Date.now() + 5000;
+          let tab = await this.getActiveTab();
+          while (holds(tab?.url) === step.negated && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 250));
+            tab = await this.getActiveTab();
+          }
+          const matches = holds(tab?.url);
           if (step.negated ? matches : !matches) {
             throw new Error(`URL is "${tab?.url}", expected ${step.negated ? 'NOT ' : ''}to contain "${step.url}"`);
           }

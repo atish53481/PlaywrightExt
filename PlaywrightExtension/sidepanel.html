@@ -18,9 +18,10 @@
       <button class="nav-btn" data-panel="inspector">🔍<span class="tooltip">Inspector</span></button>
       <div class="nav-divider"></div>
       <button class="nav-btn" data-panel="chat">💬<span class="tooltip">AI Chat</span></button>
-      <button class="nav-btn" data-panel="framework">📦<span class="tooltip">Framework</span></button>
-      <button class="nav-btn" data-panel="export">📤<span class="tooltip">Export/Import</span></button>
-      <button class="nav-btn" data-panel="session">🌐<span class="tooltip">Browser Session</span></button>
+      <!-- Hidden on request: the panel and its agent are kept, only the way in is taken out. -->
+      <button class="nav-btn" data-panel="framework" style="display:none">📦<span class="tooltip">Framework</span></button>
+      <button class="nav-btn" data-panel="export" style="display:none">📤<span class="tooltip">Export/Import</span></button>
+      <button class="nav-btn" data-panel="session" style="display:none">🌐<span class="tooltip">Browser Session</span></button>
       <button class="nav-btn" data-panel="orchestrator">🤖<span class="tooltip">Orchestrator</span></button>
       <div class="nav-divider"></div>
       <button class="nav-btn" data-panel="projects">🗂️<span class="tooltip">Projects</span></button>
@@ -71,7 +72,13 @@
           </div>
           <div class="form-group">
             <label for="planner-input">Requirement Input</label>
-            <textarea id="planner-input" rows="6" placeholder="Paste your User Story, BRD, PRD, Jira story, or feature description..."></textarea>
+            <textarea id="planner-input" rows="6" placeholder="Paste your User Story, BRD, PRD, Jira story, or feature description — or upload a file..."></textarea>
+            <div class="btn-row" style="align-items:center">
+              <button class="btn btn-secondary btn-sm" id="planner-upload" type="button">📎 Upload File</button>
+              <input type="file" id="planner-file" style="display:none">
+              <span class="item-sub" id="planner-file-note" role="status"></span>
+              <button class="btn btn-icon" id="planner-file-remove" type="button" style="display:none">✕ Remove</button>
+            </div>
           </div>
           <div class="btn-row">
             <button class="btn btn-primary" id="planner-run">🚀 Generate Test Plan</button>
@@ -99,12 +106,10 @@
           <div class="form-row">
             <div class="form-group">
               <label for="gen-language">Language</label>
+              <!-- Only what the plugin can run and store: Run on Page, Run via Playwright, and Jenkins take TypeScript and JavaScript. -->
               <select id="gen-language">
                 <option value="typescript">TypeScript</option>
                 <option value="javascript">JavaScript</option>
-                <option value="python">Python</option>
-                <option value="java">Java</option>
-                <option value="csharp">C#</option>
               </select>
             </div>
             <div class="form-group">
@@ -132,7 +137,13 @@
           </div>
           <div class="form-group">
             <label for="gen-input">Test Plan / Requirements</label>
-            <textarea id="gen-input" rows="6" placeholder="Paste test plan, user story, or feature description. Generator creates complete Playwright code..."></textarea>
+            <textarea id="gen-input" rows="6" placeholder="Paste test plan, user story, or feature description — or upload a file. Generator creates complete Playwright code..."></textarea>
+            <div class="btn-row" style="align-items:center">
+              <button class="btn btn-secondary btn-sm" id="gen-upload" type="button">📎 Upload File</button>
+              <input type="file" id="gen-file" style="display:none">
+              <span class="item-sub" id="gen-file-note" role="status"></span>
+              <button class="btn btn-icon" id="gen-file-remove" type="button" style="display:none">✕ Remove</button>
+            </div>
           </div>
           <div class="btn-row">
             <button class="btn btn-primary" id="gen-run">⚡ Generate Code</button>
@@ -224,7 +235,6 @@
               <select id="rec-language">
                 <option value="typescript">TypeScript</option>
                 <option value="javascript">JavaScript</option>
-                <option value="python">Python</option>
               </select>
             </div>
             <div class="form-group">
@@ -248,6 +258,9 @@
             <div class="action-list" id="action-list"><span style="color:var(--text3);font-size:11px;padding:4px">No actions yet</span></div>
           </div>
           <div id="rec-warnings" style="display:none;background:rgba(255,180,0,0.1);border:1px solid #ffb400;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:#ffb400"></div>
+          <div class="check-group">
+            <label title="AI Enhance writes a page class in the same file. Run on Page cannot follow a page class; Run via Playwright can."><input type="checkbox" id="rec-pom"> AI Enhance with a page class (Run via Playwright only)</label>
+          </div>
           <div class="btn-row">
             <button class="btn btn-secondary" id="rec-ai-enhance">✨ AI Enhance</button>
             <button class="btn btn-secondary" id="rec-run-live">▶ Run on Page</button>
@@ -352,8 +365,6 @@
               <select id="fw-language">
                 <option value="typescript">TypeScript</option>
                 <option value="javascript">JavaScript</option>
-                <option value="python">Python</option>
-                <option value="java">Java</option>
               </select>
             </div>
           </div>
@@ -464,6 +475,7 @@
             <button class="btn btn-primary" id="sess-start">▶ Start Capture</button>
             <button class="btn btn-danger" id="sess-stop" disabled>⏹ Stop</button>
             <button class="btn btn-secondary" id="sess-generate">✨ Generate Test</button>
+            <button class="btn btn-secondary btn-sm" id="sess-clear">Clear</button>
           </div>
           <div class="output-section">
             <div class="output-header"><span>Generated Test</span>
@@ -494,7 +506,13 @@
           </div>
           <div class="form-group">
             <label for="orch-input">Requirements Input</label>
-            <textarea id="orch-input" rows="4" placeholder="Describe your feature or paste requirements. The orchestrator runs all agents automatically..."></textarea>
+            <textarea id="orch-input" rows="4" placeholder="Describe your feature or paste requirements — or upload a file. The orchestrator runs all agents automatically..."></textarea>
+            <div class="btn-row" style="align-items:center">
+              <button class="btn btn-secondary btn-sm" id="orch-upload" type="button">📎 Upload File</button>
+              <input type="file" id="orch-file" style="display:none">
+              <span class="item-sub" id="orch-file-note" role="status"></span>
+              <button class="btn btn-icon" id="orch-file-remove" type="button" style="display:none">✕ Remove</button>
+            </div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -502,8 +520,6 @@
               <select id="orch-language">
                 <option value="typescript">TypeScript</option>
                 <option value="javascript">JavaScript</option>
-                <option value="python">Python</option>
-                <option value="java">Java</option>
               </select>
             </div>
           </div>
@@ -811,7 +827,7 @@
             <h3>About Playwright AI Studio v1.0.0</h3>
             <div style="font-size:11px;color:var(--text2);line-height:1.8">
               <div>🎭 The GitHub Copilot for QA Engineers</div>
-              <div>10 AI Agents: Planner · Generator · Healer · Recorder · Inspector · Chat · Framework · Export · Session · Orchestrator</div>
+              <div>8 AI Agents: Planner · Generator · Healer · Recorder · Inspector · Chat · Session · Orchestrator</div>
               <div style="margin-top:6px">Supports Claude, OpenAI, Gemini + Mock Provider</div>
             </div>
           </div>

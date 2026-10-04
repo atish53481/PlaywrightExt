@@ -42,17 +42,53 @@ export const BridgeClient = {
     });
   },
 
-  // LLM completion via local Claude Code CLI
-  async complete({ system, prompt }) {
+  // Whether the bridge has Playwright's test agents and MCP server installed (see its README).
+  async hasAgents() {
+    const ws = await this.connect(800);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { ws.close(); resolve(false); }, 1500);
+      ws.onmessage = (e) => {
+        let msg; try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.type === 'pong') { clearTimeout(timer); ws.close(); resolve(Boolean(msg.agents)); }
+      };
+      ws.send(JSON.stringify({ id: Date.now(), cmd: 'ping' }));
+    });
+  },
+
+  // Has the Playwright healer agent fix a failing test: it runs the test in a real browser
+  // through Playwright MCP and edits it until it passes. Resolves with { code, summary }:
+  // the test as the agent left it, and what it says it changed. onEvent gets the status lines.
+  async agentHeal(code, onEvent) {
     const ws = await this.connect();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { ws.close(); reject(new Error('Claude Code CLI timed out (120s)')); }, 120000);
+      const timer = setTimeout(() => { ws.close(); reject(new Error('The healer agent timed out (10 min)')); }, 600000);
+      const end = (settle, value) => { clearTimeout(timer); ws.onclose = null; ws.close(); settle(value); };
+      ws.onmessage = (e) => {
+        let msg; try { msg = JSON.parse(e.data); } catch { return; }
+        onEvent?.(msg);
+        if (msg.type === 'agentHealResult') end(resolve, { code: msg.code, summary: msg.summary || '' });
+        if (msg.type === 'error') end(reject, new Error(msg.error));
+      };
+      ws.onclose = () => { clearTimeout(timer); reject(new Error('Bridge connection closed')); };
+      ws.send(JSON.stringify({ id: Date.now(), cmd: 'agentHeal', payload: { code } }));
+    });
+  },
+
+  // LLM completion via local Claude Code CLI
+  // `attachments` are uploaded files Claude Code reads itself (a PDF, an image), each
+  // { name, mediaType, base64 }; the bridge saves them where the CLI can read them.
+  async complete({ system, prompt, attachments = [] }) {
+    const ws = await this.connect();
+    return new Promise((resolve, reject) => {
+      // Reading a file takes the CLI longer than answering from text.
+      const seconds = attachments.length > 0 ? 300 : 120;
+      const timer = setTimeout(() => { ws.close(); reject(new Error(`Claude Code CLI timed out (${seconds}s)`)); }, seconds * 1000);
       ws.onmessage = (e) => {
         let msg; try { msg = JSON.parse(e.data); } catch { return; }
         if (msg.type === 'completeResult') { clearTimeout(timer); ws.close(); resolve(msg.text); }
         if (msg.type === 'error') { clearTimeout(timer); ws.close(); reject(new Error(msg.error)); }
       };
-      ws.send(JSON.stringify({ id: Date.now(), cmd: 'complete', payload: { system, prompt } }));
+      ws.send(JSON.stringify({ id: Date.now(), cmd: 'complete', payload: { system, prompt, attachments } }));
     });
   }
 };

@@ -11,7 +11,7 @@ export class GeminiProvider extends AIProvider {
     return `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
   }
 
-  async complete({ system, prompt, maxTokens = 4000 }) {
+  async complete({ system, prompt, maxTokens = 4000, attachments = [] }) {
     if (!this.isConfigured()) throw new Error('Gemini API key not configured');
 
     const response = await fetch(this.apiUrl, {
@@ -19,7 +19,11 @@ export class GeminiProvider extends AIProvider {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{
-          parts: [{ text: `${system}\n\n${prompt}` }]
+          // Uploaded files the model reads itself (a PDF, an image) follow the text.
+          parts: [
+            { text: `${system}\n\n${prompt}` },
+            ...attachments.map((file) => ({ inline_data: { mime_type: file.mediaType, data: file.base64 } })),
+          ]
         }],
         generationConfig: { maxOutputTokens: maxTokens }
       })

@@ -298,6 +298,20 @@ describe('scripts run together as one run', () => {
     assert.equal(runRow({ execution: { ...run, scripts: [run.scripts[0]] } }, { withVersion: true, withId: false }).detail, 'v1 · build 59 · 2 tests: 2 passed, 0 failed · 27s');
   });
 
+  it('offers each report of the run in its row once the platform has said where they open', () => {
+    const platform = 'http://localhost:3000';
+    const finished = { ...run, runReportUrl: '/api/reports/59.1790000000.abc/', buildUrl: null };
+    const reports = [
+      { label: 'Run report', href: `${platform}/api/reports/59.1790000000.abc/` },
+      { label: 'Playwright report', href: `${platform}/api/reports/59.1790000000.abc/playwright/index.html` },
+      { label: 'Allure report', href: `${platform}/api/reports/59.1790000000.abc/allure/index.html` },
+    ];
+    assert.deepEqual(runRow({ execution: finished, reports }, { platformUrl: platform }).links, reports);
+    // Until they are known, and when the build archived none, the row keeps the run's own page.
+    assert.deepEqual(runRow({ execution: finished }, { platformUrl: platform }).links, [reports[0]]);
+    assert.deepEqual(runRow({ execution: finished, reports: [] }, { platformUrl: platform }).links, [reports[0]]);
+  });
+
   it('names the script of each test only when asked', () => {
     const items = [
       { name: 'signs in', status: 'PASSED', durationMs: 10, scriptName: 'Login' },

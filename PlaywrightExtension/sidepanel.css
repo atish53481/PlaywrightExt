@@ -132,6 +132,8 @@ select option { background: var(--bg3); }
 .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
 .btn-danger { background: #f85149; color: #fff; }
 .btn-danger:hover { background: #ff6b63; }
+/* Every kind of button looks switched off when it is: a Stop that cannot be pressed must not stay red. */
+.btn:disabled, .btn:disabled:hover { background: var(--bg3); color: var(--text3); border-color: var(--border); cursor: not-allowed; opacity: 0.6; }
 .btn-sm { padding: 4px 10px; font-size: 11px; }
 .btn-icon { background: transparent; border: 1px solid var(--border); color: var(--text2); padding: 4px 8px; font-size: 11px; }
 .btn-icon:hover { color: var(--accent); border-color: var(--accent); }

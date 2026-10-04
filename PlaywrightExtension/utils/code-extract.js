@@ -58,7 +58,8 @@ export function pickFixedCode(answer) {
     }
   }
   if (open !== null && open.length > 0) blocks.push(open.join('\n'));
-  const tests = blocks.filter((block) => /\btest(\.describe)?\s*\(/.test(block));
+  // test.skip('name', …) and test.fixme('name', …) are how a test is switched off.
+  const tests = blocks.filter((block) => /\btest(\.(describe|skip|fixme|only))?\s*\(/.test(block));
   return tests.reduce((longest, block) => (block.length > longest.length ? block : longest), '');
 }
 

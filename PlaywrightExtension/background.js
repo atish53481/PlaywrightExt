@@ -2,6 +2,13 @@
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
+// A tab opened from another tab (a link with target=_blank, window.open). The side panel
+// knows whether the tab it came from is being recorded.
+chrome.tabs.onCreated.addListener((tab) => {
+  if (tab.openerTabId == null) return;
+  chrome.runtime.sendMessage({ type: 'TAB_OPENED', tabId: tab.id, openerTabId: tab.openerTabId }).catch(() => {});
+});
+
 // Relay messages from sidepanel to active-tab content script.
 // If the content script is missing (tab opened before extension load / reload),
 // inject it once and retry — otherwise recording silently captures nothing.
@@ -17,7 +24,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.tabs.sendMessage(tab.id, message.payload, (resp) => {
         if (!chrome.runtime.lastError && resp !== undefined) { sendResponse(resp); return; }
         // Content script not there — inject and retry once
-        chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] })
+        chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['content.js'] })
           .then(() => {
             chrome.tabs.sendMessage(tab.id, message.payload, (resp2) => {
               sendResponse(resp2 || { error: chrome.runtime.lastError?.message || 'Page did not respond' });
@@ -26,6 +33,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           .catch(e => sendResponse({ error: `Cannot access this page: ${e.message}` }));
       });
     });
+    return true;
+  }
+
+  // The recorder reads a page's :hover rules to know which hover opens a menu. A page cannot
+  // read the rules of a stylesheet served from another site, so its text is fetched here:
+  // only for a content script, only over http(s), without cookies, and only what is served as CSS.
+  if (message.type === 'FETCH_CSS') {
+    if (!sender.tab || !/^https?:\/\//i.test(message.url || '')) { sendResponse({}); return; }
+    fetch(message.url, { credentials: 'omit' })
+      .then(async (response) => (response.ok && /text\/css/i.test(response.headers.get('content-type') || '')
+        ? (await response.text()).slice(0, 2_000_000)
+        : ''))
+      .then((css) => sendResponse({ css }))
+      .catch(() => sendResponse({}));
     return true;
   }
 

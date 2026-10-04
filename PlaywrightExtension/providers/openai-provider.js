@@ -8,8 +8,16 @@ export class OpenAIProvider extends AIProvider {
     this.apiUrl = 'https://api.openai.com/v1/chat/completions';
   }
 
-  async complete({ system, prompt, maxTokens = 4000 }) {
+  async complete({ system, prompt, maxTokens = 4000, attachments = [] }) {
     if (!this.isConfigured()) throw new Error('OpenAI API key not configured');
+
+    // Uploaded files the model reads itself go before the text: a PDF as a file, the rest as images.
+    const content = attachments.length === 0 ? prompt : [
+      ...attachments.map((file) => (file.mediaType === 'application/pdf'
+        ? { type: 'file', file: { filename: file.name, file_data: `data:${file.mediaType};base64,${file.base64}` } }
+        : { type: 'image_url', image_url: { url: `data:${file.mediaType};base64,${file.base64}` } })),
+      { type: 'text', text: prompt },
+    ];
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -22,7 +30,7 @@ export class OpenAIProvider extends AIProvider {
         max_tokens: maxTokens,
         messages: [
           { role: 'system', content: system },
-          { role: 'user', content: prompt }
+          { role: 'user', content }
         ]
       })
     });
