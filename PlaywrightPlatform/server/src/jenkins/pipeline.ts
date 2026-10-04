@@ -26,19 +26,60 @@ function packageJson(playwrightVersion: string): string {
 `;
 }
 
-const PLAYWRIGHT_CONFIG = `import { defineConfig, devices } from '@playwright/test';
+/**
+ * What a run is called in its reports: "Run #38 - Login test - v2". It is written to a file
+ * in the workspace, never put on a command line, so only control characters are removed.
+ */
+export function runLabel(executionId: number, scriptName: string, scriptVersion: number): string {
+  const name = scriptName.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  return `Run #${executionId} - ${name || 'script'} - v${scriptVersion}`;
+}
+
+/**
+ * The file name the script gets in the build, without ".spec.ts": the script's name in
+ * lower-case letters, digits, and hyphens. It is part of a command line, so nothing else is let through.
+ */
+export function specName(scriptName: string): string {
+  const slug = scriptName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/, '');
+  return slug || 'script';
+}
+
+// Both reports carry the run's label (see runLabel), read from run-label.txt, so a person
+// reading one knows which stored script, which version, and which run it shows.
+const PLAYWRIGHT_CONFIG = `import fs from 'node:fs';
+import { defineConfig, devices } from '@playwright/test';
+
+const label = fs.existsSync('run-label.txt') ? fs.readFileSync('run-label.txt', 'utf8').trim() : '';
 
 export default defineConfig({
   testDir: 'tests',
   reporter: [
-    ['html', { open: 'never' }],
+    ['html', { open: 'never', title: label || undefined }],
     ['json', { outputFile: 'results.json' }],
-    ['allure-playwright', { resultsDir: 'allure-results' }],
+    ['allure-playwright', { resultsDir: 'allure-results', environmentInfo: { Run: label, Browser: 'Chromium (headless)' } }],
   ],
-  // What a failed test leaves behind for the person reading the report.
-  use: { headless: true, screenshot: 'only-on-failure', video: 'retain-on-failure', trace: 'retain-on-failure' },
+  metadata: { run: label },
+  // A screenshot of every test's last page, and for a failed test its video and trace too.
+  use: { headless: true, screenshot: 'on', video: 'retain-on-failure', trace: 'retain-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 });
+`;
+
+// The Allure report as one HTML file, named after the run.
+const ALLURE_CONFIG = `import fs from 'node:fs';
+
+const label = fs.existsSync('run-label.txt') ? fs.readFileSync('run-label.txt', 'utf8').trim() : '';
+
+export default {
+  name: label || 'Allure Report',
+  output: 'allure-report',
+  plugins: { awesome: { options: { singleFile: true, reportName: label || 'Allure Report' } } },
+};
 `;
 
 // Runs in the container after the tests. Reads Playwright's JSON report and writes the counts
@@ -183,14 +224,20 @@ pipeline {
         writeFile file: 'package.json', text: ${groovy(packageJson(playwrightVersionFromTag(image)))}
         writeFile file: 'playwright.config.ts', text: ${groovy(PLAYWRIGHT_CONFIG)}
         writeFile file: 'report-result.cjs', text: ${groovy(REPORT_SCRIPT)}
+        writeFile file: 'allurerc.mjs', text: ${groovy(ALLURE_CONFIG)}
         script {
+          // What the reports call this run. Written as a file: it never meets a shell.
+          writeFile file: 'run-label.txt', text: (params.RUN_LABEL ?: '')
+          // The test file is named after the script, so the reports show that name. The name
+          // becomes part of a command line, so anything but a plain slug falls back to "script".
+          def spec = (params.SPEC_NAME ?: '') ==~ /[a-z0-9][a-z0-9-]{0,60}/ ? params.SPEC_NAME : 'script'
           // The agent downloads the script. "set +x" and "@" keep the shell from printing the line, and the token with it.
           if (isUnix()) {
             sh 'mkdir -p tests'
-            sh 'set +x; curl -sS -f -H "Authorization: Bearer $RUN_TOKEN" -H "X-Build-Number: $BUILD_NUMBER" -o tests/script.spec.ts "$PLATFORM_URL/api/executions/$EXECUTION_ID/script"'
+            sh 'set +x; curl -sS -f -H "Authorization: Bearer $RUN_TOKEN" -H "X-Build-Number: $BUILD_NUMBER" -o tests/' + spec + '.spec.ts "$PLATFORM_URL/api/executions/$EXECUTION_ID/script"'
           } else {
             bat 'if not exist tests mkdir tests'
-            bat '@curl -sS -f -H "Authorization: Bearer %RUN_TOKEN%" -H "X-Build-Number: %BUILD_NUMBER%" -o tests\\\\script.spec.ts "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/script"'
+            bat '@curl -sS -f -H "Authorization: Bearer %RUN_TOKEN%" -H "X-Build-Number: %BUILD_NUMBER%" -o tests\\\\' + spec + '.spec.ts "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/script"'
           }
         }
       }
@@ -207,7 +254,7 @@ pipeline {
         script {
           // The result is written whatever the tests did; the container ends with the tests' own exit code.
           // The Allure report is one HTML file, made here because the agent has no Node.js.
-          def code = inImage('npx playwright test; rc=$?; node report-result.cjs; [ -d allure-results ] && npx allure awesome allure-results --single-file --output allure-report; exit $rc')
+          def code = inImage('npx playwright test; rc=$?; node report-result.cjs; [ -d allure-results ] && npx allure generate allure-results; exit $rc')
           if (code != 0) { currentBuild.result = 'UNSTABLE' }
         }
       }
@@ -260,6 +307,16 @@ export function jobConfigXml(image: string): string {
         <hudson.model.StringParameterDefinition>
           <name>PLAYWRIGHT_IMAGE</name>
           <defaultValue>${xml(image)}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>RUN_LABEL</name>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>SPEC_NAME</name>
+          <defaultValue>script</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
       </parameterDefinitions>

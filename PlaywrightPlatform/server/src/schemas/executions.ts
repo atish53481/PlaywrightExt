@@ -22,7 +22,12 @@ export const reportFileParams = z.object({
 });
 
 const reportLink = z.string().nullable();
-export const reportLinksResponse = z.object({ reports: z.object({ playwright: reportLink, allure: reportLink }) });
+export const reportLinksResponse = z.object({
+  reports: z.object({ overview: reportLink, playwright: reportLink, allure: reportLink }),
+});
+
+/** The run's own report page: only the signed link token. */
+export const reportOverviewParams = z.object({ token: z.string().min(1).max(200) });
 
 const executionDto = z.object({
   id: z.number(),

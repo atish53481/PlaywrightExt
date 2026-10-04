@@ -49,9 +49,14 @@ function RunReports({ run }: { run: Execution }) {
       </>
     );
   }
-  if (!links.playwright && !links.allure) return <span className="muted">No report was archived</span>;
+  if (!links.overview && !links.playwright && !links.allure) return <span className="muted">No report was archived</span>;
   return (
     <>
+      {links.overview && (
+        <a className="btn btn-primary btn-sm" href={links.overview} target="_blank" rel="noopener noreferrer">
+          Run report
+        </a>
+      )}
       {links.playwright && (
         <a className="btn btn-secondary btn-sm" href={links.playwright} target="_blank" rel="noopener noreferrer">
           Playwright report

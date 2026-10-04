@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { AppError } from '../errors';
 import { parse, shape } from '../http';
 import { actorOf, signedIn, writers } from '../plugins/auth';
+import { runReportPage } from '../reports/run-report-page';
 import { idParams } from '../schemas/common';
 import {
   executionListResponse,
@@ -10,6 +11,7 @@ import {
   listExecutionsQuery,
   reportFileParams,
   reportLinksResponse,
+  reportOverviewParams,
   resultParams,
   runReportBody,
   toExecutionDto,
@@ -76,6 +78,24 @@ export async function executionRoutes(app: FastifyInstance, deps: ExecutionRoute
   app.get('/executions/:id/reports', { preHandler: signedIn }, async (req) => {
     const { id } = parse(idParams, req.params);
     return shape(reportLinksResponse, { reports: await deps.executions.reportLinks(id) });
+  });
+
+  // The run's own report page: the run, its tests, and both reports as tabs. Opened through
+  // the same signed link as the reports. The page holds no script and escapes every value,
+  // so it may frame the two reports and nothing else may run on it.
+  app.get('/reports/:token/', async (req, reply) => {
+    const { token } = parse(reportOverviewParams, req.params);
+    const view = await deps.executions.reportOverview(token);
+    return reply
+      .type('text/html; charset=utf-8')
+      .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; base-uri 'none'; form-action 'none'")
+      .header('Cache-Control', 'private, no-store')
+      .send(runReportPage(view));
+  });
+  // Without the last slash the page's relative links to the reports would point elsewhere.
+  app.get('/reports/:token', async (req, reply) => {
+    const { token } = parse(reportOverviewParams, req.params);
+    return reply.redirect(`${encodeURIComponent(token)}/`);
   });
 
   // A file of a report. No session guard: the link was signed for a signed-in person and

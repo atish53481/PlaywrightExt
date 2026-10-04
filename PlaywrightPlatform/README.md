@@ -234,6 +234,17 @@ For a script that is already stored:
    at trace.playwright.dev. A script that does not compile, or
    has no tests, ends as Error with the reason.
 4. **Stop** aborts a queued or running build. **Recent runs** lists the script's last 10 runs.
+   - **Run report** on a finished run opens a page of its own: the script, its version, who
+     ran it and when, the result of every test, and the Playwright and Allure reports as two
+     tabs. Both reports are titled "Run #38 - <script name> - v2", and the test file in them
+     is named after the script. The page opens from the platform, with no Jenkins sign-in.
+   - To run several scripts, tick them in the project's script list (or **Select all**) and
+     press **Run selected on Jenkins**. Each script becomes its own run; the list above the
+     scripts shows how each one ended.
+   - **Edit** (ADMIN or USER) changes the script's name or text; new text is saved as the
+     next version.
+   - An ADMIN adds a project with **New project** in the project list, and renames or deletes
+     the open project with **Rename** and **Delete project**.
 5. **Delete** (ADMIN or USER, asked once more in the panel) removes the script from the
    platform and deletes its builds, with their logs and reports, from Jenkins. It waits for
    an unfinished run to end. If Jenkins cannot be reached the script is still deleted and

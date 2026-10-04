@@ -165,7 +165,7 @@ describe('executions: stop and the pipeline endpoints', () => {
 
     it('offers a link for each report the build archived, once the run has finished', async () => {
       const { id, queueId } = await startRun(world, stub);
-      expect((await links(id)).json().reports).toEqual({ playwright: null, allure: null });
+      expect((await links(id)).json().reports).toEqual({ overview: null, playwright: null, allure: null });
 
       setBuild(stub, queueId, 41, PASSED_BUILD);
       await poll(world, id);
@@ -210,6 +210,65 @@ describe('executions: stop and the pipeline endpoints', () => {
       // The link opens the report folders only, and nothing above them.
       expect((await open(url.replace('playwright/index.html', 'playwright/..%2F..%2Fconfig.xml'))).statusCode).toBe(400);
       expect((await open(url.replace('/playwright/', '/other/'))).statusCode).toBe(400);
+    });
+
+    it('opens the run on a page of its own: the script, the result of each test, and both reports', async () => {
+      const { id, queueId, token } = await startRun(world, stub);
+      const tests = [
+        { name: 'cart > adds <b>one</b> item', status: 'PASSED', durationMs: 1200 },
+        { name: 'cart > checks out', status: 'FAILED', durationMs: 3400, errorMessage: 'expected "Thank you" & got <none>' },
+      ];
+      await postResult(id, token, { total: 2, passed: 1, failed: 1, skipped: 0, tests });
+      setBuild(stub, queueId, 41, { building: false, result: 'UNSTABLE', duration: 5_000 });
+      await poll(world, id);
+      stub.artifacts.set(`${JOB}/41/playwright-report/index.html`, html('<html></html>'));
+
+      const overview: string = (await links(id)).json().reports.overview;
+      expect(overview).toMatch(/^\/api\/reports\/[^/]+\/$/);
+      const page = await open(overview);
+      expect(page.statusCode).toBe(200);
+      expect(page.headers['content-type']).toBe('text/html; charset=utf-8');
+      // Nothing may run on the page; it may only frame the reports.
+      expect(page.headers['content-security-policy']).toContain("default-src 'none'");
+      expect(page.headers['content-security-policy']).toContain("frame-src 'self'");
+      expect(page.body).not.toContain('<script');
+
+      // Which script, which version, which run, who started it, and how it ended.
+      expect(page.body).toContain('<h1>Login Test</h1>');
+      expect(page.body).toContain('version 1 · run #' + id);
+      expect(page.body).toContain('Jenkins build 41');
+      expect(page.body).toContain('Uma User');
+      expect(page.body).toContain('<span class="badge bad">Failed</span>');
+      expect(page.body).toContain('1 passed');
+      expect(page.body).toContain('1 failed');
+      // Each test, with text from the build escaped.
+      expect(page.body).toContain('cart &#62; adds &#60;b&#62;one&#60;/b&#62; item');
+      expect(page.body).toContain('expected &#34;Thank you&#34; &#38; got &#60;none&#62;');
+      expect(page.body).not.toContain('<b>one</b>');
+
+      // Only the report the build archived is offered, by a link relative to the page.
+      expect(page.body).toContain('<iframe id="frame-playwright" src="playwright/index.html"');
+      expect(page.body).not.toContain('id="frame-allure"');
+      expect((await open(overview + 'playwright/index.html')).statusCode).toBe(200);
+
+      // The address without its last slash leads to the page.
+      const bare = await open(overview.slice(0, -1));
+      expect(bare.statusCode).toBe(302);
+      expect(bare.headers.location).toBe(`${overview.split('/')[3]}/`);
+      expect((await open('/api/reports/not-a-link/')).statusCode).toBe(401);
+    });
+
+    it('says why there is nothing to open when the build archived no report', async () => {
+      const { id, queueId } = await startRun(world, stub);
+      setBuild(stub, queueId, 41, { building: false, result: 'FAILURE', duration: 1_000 });
+      await poll(world, id);
+      const reports = (await links(id)).json().reports;
+      expect(reports).toMatchObject({ playwright: null, allure: null });
+      const page = await open(reports.overview);
+      expect(page.statusCode).toBe(200);
+      expect(page.body).toContain('archived no report');
+      expect(page.body).toContain('The build failed before the tests ran');
+      expect(page.body).not.toContain('<iframe');
     });
 
     it('refuses a link that was changed, belongs to another run, or has expired', async () => {

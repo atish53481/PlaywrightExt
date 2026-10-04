@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { JenkinsClient, JenkinsError } from '../src/jenkins/jenkins-client';
-import { jobConfigXml, pipelineScript, playwrightVersionFromTag } from '../src/jenkins/pipeline';
+import { jobConfigXml, pipelineScript, playwrightVersionFromTag, runLabel, specName } from '../src/jenkins/pipeline';
 import { jenkinsBuildUrl, jenkinsJobUrl, jenkinsReportUrl } from '../src/jenkins/urls';
 import { startJenkinsStub, type JenkinsStub } from './jenkins-stub';
 
@@ -209,10 +209,13 @@ describe('pipeline text', () => {
     // The report, and the screenshot, video, and trace of each failed test.
     expect(post).toContain("archiveArtifacts artifacts: 'playwright-report/**, allure-report/**, test-results/**'");
     // The Allure report: results written by the reporter, then one HTML file made from them, in the container.
-    expect(script).toContain("[\\'allure-playwright\\', { resultsDir: \\'allure-results\\' }]");
-    expect(script).toContain('npx allure awesome allure-results --single-file --output allure-report; exit $rc');
+    expect(script).toContain("[\\'allure-playwright\\', { resultsDir: \\'allure-results\\'");
+    expect(script).toContain('[ -d allure-results ] && npx allure generate allure-results; exit $rc');
+    expect(script).toContain("writeFile file: 'allurerc.mjs'");
+    expect(script).toContain('singleFile: true');
     expect(script).not.toMatch(/^\s*(bat|sh)[ (][^\n]*'[^'\n]*npx allure/m);
-    expect(script).toContain("screenshot: \\'only-on-failure\\'");
+    // A screenshot of every test, so a passed run can be shown to have done its work.
+    expect(script).toContain("screenshot: \\'on\\'");
     // Each test's own result travels with the counts.
     expect(script).toContain('tests: collectTests(report.suites, [], [])');
   });
@@ -222,9 +225,44 @@ describe('pipeline text', () => {
     expect(script).toContain("error('npm install failed");
   });
 
-  it('wraps the pipeline in a job definition with four parameters declared and markup escaped', () => {
+  it('names the run in both reports, and the test file after the script', () => {
+    // The label is written to a file by Jenkins itself and read by both report configurations.
+    expect(script).toContain("writeFile file: 'run-label.txt', text: (params.RUN_LABEL ?: '')");
+    expect(script).toContain("title: label || undefined");
+    expect(script).toContain("reportName: label || \\'Allure Report\\'");
+    // The label never appears on a command line.
+    for (const line of script.split('\n').filter((l) => /\b(sh|bat)\b/.test(l))) expect(line).not.toContain('RUN_LABEL');
+    // The file name does, so only a plain slug is let through.
+    expect(script).toContain("def spec = (params.SPEC_NAME ?: '') ==~ /[a-z0-9][a-z0-9-]{0,60}/ ? params.SPEC_NAME : 'script'");
+    expect(script).toContain("-o tests/' + spec + '.spec.ts ");
+    expect(script).toContain("-o tests\\\\' + spec + '.spec.ts ");
+  });
+
+  it.each([
+    ['Login Test', 'login-test'],
+    ['  TC1: Add to cart (smoke)  ', 'tc1-add-to-cart-smoke'],
+    ['"; rm -rf / #', 'rm-rf'],
+    ['%PATH% & calc', 'path-calc'],
+    ['日本語', 'script'],
+    ['', 'script'],
+    ['x'.repeat(200), 'x'.repeat(60)],
+  ])('makes a safe file name of %j', (name, expected) => {
+    expect(specName(name)).toBe(expected);
+    expect(specName(name)).toMatch(/^[a-z0-9][a-z0-9-]{0,60}$/);
+  });
+
+  it('labels a run with its number, script, and version', () => {
+    expect(runLabel(38, 'Login Test', 2)).toBe('Run #38 - Login Test - v2');
+    expect(runLabel(1, 'a\r\nb\u0000c', 1)).toBe('Run #1 - a b c - v1');
+    expect(runLabel(7, '   ', 3)).toBe('Run #7 - script - v3');
+    expect(runLabel(7, 'n'.repeat(500), 3).length).toBeLessThan(130);
+  });
+
+  it('wraps the pipeline in a job definition with six parameters declared and markup escaped', () => {
     const xml = jobConfigXml(IMAGE);
-    expect(xml.match(/<name>/g)).toHaveLength(4);
+    expect(xml.match(/<name>/g)).toHaveLength(6);
+    expect(xml).toContain('<name>RUN_LABEL</name>');
+    expect(xml).toContain('<name>SPEC_NAME</name>');
     expect(xml).toContain('<name>EXECUTION_ID</name>');
     expect(xml).toContain('<name>PLATFORM_URL</name>');
     expect(xml).toContain('<hudson.model.PasswordParameterDefinition>');

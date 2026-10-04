@@ -51,6 +51,9 @@ describe('executions: start and read a run', () => {
     // The image the tests run in is the server's setting, sent with every run.
     expect(stub.lastParams.PLAYWRIGHT_IMAGE).toBe('mcr.microsoft.com/playwright:v1.63.0-noble');
     expect(stub.lastParams.PLAYWRIGHT_IMAGE).toBe(world.ctx.config.playwrightDockerImage);
+    // What the reports call the run, and what the test file is named in the build.
+    expect(stub.lastParams.RUN_LABEL).toBe('Run #1 - Login Test - v1');
+    expect(stub.lastParams.SPEC_NAME).toBe('login-test');
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
     const [row] = await rows();

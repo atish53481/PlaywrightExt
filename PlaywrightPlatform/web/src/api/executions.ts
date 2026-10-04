@@ -21,6 +21,8 @@ export interface Execution {
 
 /** Where each report of a run opens; null when the build archived no such report. */
 export interface ReportLinks {
+  /** The run's own page: the script, each test's result, and both reports. */
+  overview: string | null;
   playwright: string | null;
   allure: string | null;
 }

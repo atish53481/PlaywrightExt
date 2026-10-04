@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { AppError, notFound } from '../errors';
 import { JenkinsError, type BuildState } from '../jenkins/jenkins-client';
+import { runLabel, specName } from '../jenkins/pipeline';
 import { jenkinsReportUrl } from '../jenkins/urls';
 import type { Transact } from '../repositories';
 import type { AuditRepository } from '../repositories/audit-repository';
@@ -63,6 +64,13 @@ export interface RunReport {
 }
 
 export type ReportKind = 'playwright' | 'allure';
+
+/** Where a run's report page and its two reports open; each null when there is nothing to open. */
+export interface ReportLinks {
+  overview: string | null;
+  playwright: string | null;
+  allure: string | null;
+}
 
 /** Where the pipeline leaves each report in the build's archive. */
 const REPORT_DIRS: Record<ReportKind, string> = { playwright: 'playwright-report', allure: 'allure-report' };
@@ -208,7 +216,7 @@ export class ExecutionService {
         { projectId: current.projectId, scriptId, scriptVersion: current.version },
         r.audit,
       );
-      return { id, version: current.version };
+      return { id, version: current.version, name: current.name };
     });
 
     try {
@@ -217,6 +225,9 @@ export class ExecutionService {
         PLATFORM_URL: this.options.publicUrl,
         RUN_TOKEN: token,
         PLAYWRIGHT_IMAGE: this.options.playwrightImage,
+        // So the reports say which script, version, and run they show.
+        RUN_LABEL: runLabel(created.id, created.name, created.version),
+        SPEC_NAME: specName(created.name),
       });
       await this.executions.updateActive(created.id, { queueId });
     } catch (err) {
@@ -381,22 +392,51 @@ export class ExecutionService {
    * Links that open the reports of a finished run, each null when the build archived no such
    * report. A link works for an hour, without a session: see ReportLinkSigner.
    */
-  async reportLinks(id: number): Promise<Record<ReportKind, string | null>> {
+  async reportLinks(id: number): Promise<ReportLinks> {
     const execution = await this.find(id);
-    const build = execution.buildNumber;
-    if (build === null || !FINAL.has(execution.status)) return { playwright: null, allure: null };
-    const link = await this.jenkins.link();
+    if (!FINAL.has(execution.status)) return { overview: null, playwright: null, allure: null };
     const token = this.options.reportLinks.sign(id, this.options.now() + REPORT_LINK_TTL_MS);
-    const offer = async (kind: ReportKind): Promise<string | null> =>
-      (await link.client.artifactExists(execution.jobName, build, `${REPORT_DIRS[kind]}/index.html`))
-        ? `/api/reports/${token}/${kind}/index.html`
-        : null;
+    // The run's own page needs no build: it shows what the platform stored about the run.
+    const overview = `/api/reports/${token}/`;
+    const build = execution.buildNumber;
+    if (build === null) return { overview, playwright: null, allure: null };
+    const link = await this.jenkins.link();
     try {
-      const [playwright, allure] = await Promise.all([offer('playwright'), offer('allure')]);
-      return { playwright, allure };
+      const has = await this.archivedReports(link, execution.jobName, build);
+      const path = (kind: ReportKind) => (has[kind] ? `/api/reports/${token}/${kind}/index.html` : null);
+      return { overview, playwright: path('playwright'), allure: path('allure') };
     } catch (err) {
       throw toAppError(err);
     }
+  }
+
+  /**
+   * What the run's own report page shows: the run, its tests, and which reports the build
+   * archived. Opened through a signed link, like the reports themselves. If Jenkins cannot be
+   * asked, the page still shows the run, without the reports.
+   */
+  async reportOverview(token: string): Promise<{ execution: Execution; results: TestResult[]; has: Record<ReportKind, boolean> }> {
+    const id = this.options.reportLinks.verify(token, this.options.now());
+    if (id === null) throw reportLinkExpired();
+    const execution = await this.executions.find(id);
+    if (!execution) throw notFound('Report');
+    const results = await this.executions.listResults(id);
+    let has: Record<ReportKind, boolean> = { playwright: false, allure: false };
+    if (execution.buildNumber !== null) {
+      try {
+        has = await this.archivedReports(await this.jenkins.link(), execution.jobName, execution.buildNumber);
+      } catch (err) {
+        this.log.warn(`[EXECUTION] Reports of run ${id} could not be looked up: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { execution, results, has };
+  }
+
+  /** Which reports a build archived. */
+  private async archivedReports(link: JenkinsLink, jobName: string, build: number): Promise<Record<ReportKind, boolean>> {
+    const has = (kind: ReportKind) => link.client.artifactExists(jobName, build, `${REPORT_DIRS[kind]}/index.html`);
+    const [playwright, allure] = await Promise.all([has('playwright'), has('allure')]);
+    return { playwright, allure };
   }
 
   /**
