@@ -1,21 +1,27 @@
 // Test Runner — parses generated Playwright code into steps and executes them
 // on the active tab via the content script, so users can watch tests run live.
 
+// A string literal ends at the quote it opened with: '[data-test="username"]' holds
+// double quotes and is one string. A backslash escapes the character after it.
+const STRING = `'(?:\\\\.|[^'\\\\])*'|"(?:\\\\.|[^"\\\\])*"|\`(?:\\\\.|[^\`\\\\])*\``;
+// Call arguments: a bracket inside a string does not close the call.
+const ARGS = `(?:${STRING}|[^)'"\`])*`;
+
 function firstString(src) {
-  const m = src.match(/['"`]([^'"`]*)['"`]/);
-  return m ? m[1] : null;
+  const m = src.match(new RegExp(STRING));
+  return m ? m[0].slice(1, -1).replace(/\\(.)/g, '$1') : null;
 }
 
 // Parses a locator expression like: page.getByRole('button', { name: 'Login' })
 function parseLocator(expr) {
-  const m = expr.match(/\.(getByRole|getByLabel|getByText|getByPlaceholder|getByTestId|locator)\(([^)]*)\)/);
+  const m = expr.match(new RegExp(`\\.(getByRole|getByLabel|getByText|getByPlaceholder|getByTestId|locator)\\((${ARGS})\\)`));
   if (!m) return null;
   const method = m[1];
   const args = m[2];
   const value = firstString(args);
   if (value === null) return null;
-  const nameMatch = args.match(/name:\s*['"`]([^'"`]+)['"`]/);
-  return { method, value, name: nameMatch ? nameMatch[1] : null, raw: expr.trim() };
+  const nameMatch = args.match(new RegExp(`name:\\s*(${STRING})`));
+  return { method, value, name: nameMatch ? firstString(nameMatch[1]) : null, raw: expr.trim() };
 }
 
 export const TestRunner = {
@@ -50,7 +56,7 @@ export const TestRunner = {
       }
 
       // expect(<locator>).<assertion>(...)
-      if ((m = line.match(/expect\(([^)]*\([^)]*\)[^)]*)\)\.(not\.)?(toBeVisible|toBeHidden|toContainText|toHaveText|toHaveValue|toBeEnabled|toBeDisabled)\((.*?)\)/))) {
+      if ((m = line.match(new RegExp(`expect\\(([^()]*\\(${ARGS}\\)[^()]*)\\)\\.(not\\.)?(toBeVisible|toBeHidden|toContainText|toHaveText|toHaveValue|toBeEnabled|toBeDisabled)\\((${ARGS})\\)`)))) {
         const locator = parseLocator(m[1]);
         if (locator) {
           steps.push({
@@ -63,7 +69,7 @@ export const TestRunner = {
       }
 
       // <locator>.click() / .fill('x') / .press('Enter') / .check() / .selectOption('x')
-      if ((m = line.match(/\.(click|dblclick|fill|press|check|uncheck|selectOption|clear|hover)\(([^)]*)\)\s*;?\s*$/))) {
+      if ((m = line.match(new RegExp(`\\.(click|dblclick|fill|press|check|uncheck|selectOption|clear|hover)\\((${ARGS})\\)\\s*;?\\s*$`)))) {
         const locator = parseLocator(line);
         if (locator) {
           steps.push({
@@ -141,7 +147,14 @@ export const TestRunner = {
           const tab = await this.getActiveTab();
           if (!tab?.title?.includes(step.title)) throw new Error(`Title is "${tab?.title}", expected "${step.title}"`);
         } else {
-          const resp = await this.sendToContent({ type: 'RUN_STEP', step });
+          // The element may not be on the page yet (the step before opened a menu or a new view),
+          // so a step that finds nothing is tried again for a few seconds, as Playwright does.
+          const deadline = Date.now() + 5000;
+          let resp = await this.sendToContent({ type: 'RUN_STEP', step });
+          while (!resp?.ok && /^Element not found/.test(resp?.error || '') && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 250));
+            resp = await this.sendToContent({ type: 'RUN_STEP', step });
+          }
           if (!resp?.ok) throw new Error(resp?.error || 'Step failed on page');
         }
         summary.passed++;

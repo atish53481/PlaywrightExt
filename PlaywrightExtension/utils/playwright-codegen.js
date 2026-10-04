@@ -1,32 +1,39 @@
-﻿export const PlaywrightCodegen = {
+﻿// A recorded value goes inside '...' in the generated code.
+const q = (value) => String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+const loc = (a) => a.locator || `locator('${q(a.selector)}')`;
+
+export const PlaywrightCodegen = {
   actionToCode(action, language = 'typescript') {
     const map = {
-      navigate:    a => `await page.goto('${a.url}');`,
-      click:       a => `await page.${a.locator || `locator('${a.selector}')`}.click();`,
-      fill:        a => `await page.${a.locator || `locator('${a.selector}')`}.fill('${a.value || ''}');`,
-      clear:       a => `await page.${a.locator || `locator('${a.selector}')`}.clear();`,
-      press:       a => `await page.keyboard.press('${a.key}');`,
-      type:        a => `await page.keyboard.type('${a.text}');`,
-      select:      a => `await page.${a.locator || `locator('${a.selector}')`}.selectOption('${a.value}');`,
-      check:       a => `await page.${a.locator || `locator('${a.selector}')`}.check();`,
-      uncheck:     a => `await page.${a.locator || `locator('${a.selector}')`}.uncheck();`,
-      hover:       a => `await page.${a.locator || `locator('${a.selector}')`}.hover();`,
-      focus:       a => `await page.${a.locator || `locator('${a.selector}')`}.focus();`,
+      navigate:    a => `await page.goto('${q(a.url)}');`,
+      click:       a => `await page.${loc(a)}.click();`,
+      fill:        a => `await page.${loc(a)}.fill('${q(a.value)}');`,
+      clear:       a => `await page.${loc(a)}.clear();`,
+      press:       a => `await page.keyboard.press('${q(a.key)}');`,
+      type:        a => `await page.keyboard.type('${q(a.text)}');`,
+      select:      a => `await page.${loc(a)}.selectOption('${q(a.value)}');`,
+      check:       a => `await page.${loc(a)}.check();`,
+      uncheck:     a => `await page.${loc(a)}.uncheck();`,
+      hover:       a => `await page.${loc(a)}.hover();`,
+      focus:       a => `await page.${loc(a)}.focus();`,
       screenshot:  a => `await page.screenshot({ path: 'screenshot.png'${a.fullPage ? ', fullPage: true' : ''} });`,
-      wait:        a => a.selector ? `await page.waitForSelector('${a.selector}');` : `await page.waitForLoadState('networkidle');`,
-      assertText:  a => `await expect(page.${a.locator || `locator('${a.selector}')`}).toContainText('${a.value}');`,
-      assertUrl:   a => `await expect(page).toHaveURL('${a.url}');`,
-      assertTitle: a => `await expect(page).toHaveTitle('${a.title}');`,
-      upload:      a => `await page.${a.locator || `locator('${a.selector}')`}.setInputFiles('${a.file}');`,
+      wait:        a => a.selector ? `await page.waitForSelector('${q(a.selector)}');` : `await page.waitForLoadState('networkidle');`,
+      assertText:  a => `await expect(page.${loc(a)}).toContainText('${q(a.value)}');`,
+      assertUrl:   a => `await expect(page).toHaveURL('${q(a.url)}');`,
+      assertTitle: a => `await expect(page).toHaveTitle('${q(a.title)}');`,
+      upload:      a => `await page.${loc(a)}.setInputFiles('${q(a.file)}');`,
     };
     const fn = map[action.type];
     return fn ? fn(action) : `// Unknown action: ${action.type}`;
   },
 
-  // Recording fires one 'fill' per keystroke — keep only the final value per field
+  // Recording fires one 'fill' per keystroke — keep only the final value per field.
+  // A click on the page background (<html> or <body>) is dropped: it does nothing a test
+  // could repeat. The recorder no longer records one, but a recording saved earlier may hold one.
   normalizeActions(actions) {
     const normalized = [];
     for (const a of actions) {
+      if (a.type === 'click' && ['HTML', 'BODY'].includes(a.elementInfo?.tag)) continue;
       const prev = normalized[normalized.length - 1];
       if (a.type === 'fill' && prev?.type === 'fill' && prev.selector === a.selector) {
         normalized[normalized.length - 1] = a;

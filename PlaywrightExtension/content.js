@@ -54,9 +54,27 @@
     if (el.getAttribute('placeholder')) return `[placeholder="${el.getAttribute('placeholder')}"]`;
     if (el.id) return `#${el.id}`;
     if (el.getAttribute('name')) return `[name="${el.getAttribute('name')}"]`;
-    const text = el.textContent?.trim().slice(0, 40);
-    if (text) return `text="${text}"`;
-    return el.tagName.toLowerCase();
+    // text="..." matches the whole text, so it is used only when the whole text is short.
+    const text = visibleText(el);
+    if (text && text.length <= 40 && !/["\n]/.test(text)) return `text="${text}"`;
+    return cssPath(el);
+  }
+
+  // The text a user sees. textContent also holds the source of <script> and <style> tags.
+  function visibleText(el) {
+    return (el.innerText ?? el.textContent ?? '').trim();
+  }
+
+  // A CSS path from the nearest ancestor with an id, for an element with nothing better to go by.
+  function cssPath(el) {
+    const parts = [];
+    for (let node = el; node && node.nodeType === 1 && node !== document.documentElement; node = node.parentElement) {
+      if (node.id && /^[A-Za-z][\w-]*$/.test(node.id)) { parts.unshift(`#${node.id}`); break; }
+      const tag = node.tagName.toLowerCase();
+      const sameTag = node.parentElement ? [...node.parentElement.children].filter(c => c.tagName === node.tagName) : [];
+      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${sameTag.indexOf(node) + 1})` : tag);
+    }
+    return parts.join(' > ') || 'html';
   }
 
   function getElementInfo(el) {
@@ -70,8 +88,8 @@
       return [...document.querySelectorAll(`[${attr}]`)].filter(e => e.getAttribute(attr) === value).length;
     };
     const sameText = (selector, length) => {
-      const own = el.textContent?.trim().slice(0, length);
-      return [...document.querySelectorAll(selector)].filter(e => e.textContent?.trim().slice(0, length) === own).length;
+      const own = visibleText(el).slice(0, length);
+      return [...document.querySelectorAll(selector)].filter(e => visibleText(e).slice(0, length) === own).length;
     };
     // The value sits inside '...' in the generated code, and inside "..." in an attribute selector.
     const quote = (value) => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -83,7 +101,7 @@
     if (el.getAttribute('placeholder')) locators.push({ strategy: 'placeholder', locator: `getByPlaceholder('${quote(el.getAttribute('placeholder'))}')`, score: 70, matches: sameAttr('placeholder') });
     if (el.getAttribute('role')) {
       const role = el.getAttribute('role');
-      const name = el.textContent?.trim().slice(0, 50);
+      const name = visibleText(el).split('\n')[0].slice(0, 50);
       locators.push({ strategy: 'role', locator: name ? `getByRole('${quote(role)}', { name: '${quote(name)}' })` : `getByRole('${quote(role)}')`, score: 90, matches: name ? sameText(`[role="${role}"]`, 50) : sameAttr('role') });
     }
     if (el.id) {
@@ -92,8 +110,10 @@
       locators.push({ strategy: 'id', locator: simple ? `locator('#${el.id}')` : attrLocator('id'), score: 55, matches: sameAttr('id') });
     }
     if (el.getAttribute('name')) locators.push({ strategy: 'name', locator: attrLocator('name'), score: 45, matches: sameAttr('name') });
-    const text = el.textContent?.trim().slice(0, 50);
-    if (text && ['BUTTON','A','LABEL'].includes(el.tagName)) locators.push({ strategy: 'text', locator: `getByText('${quote(text)}')`, score: 60, matches: sameText('button, a, label, span, div, p, li, h1, h2, h3, h4', 50) });
+    const text = visibleText(el).split('\n')[0].slice(0, 50);
+    if (text && (['BUTTON','A','LABEL'].includes(el.tagName) || el.children.length === 0)) locators.push({ strategy: 'text', locator: `getByText('${quote(text)}')`, score: 60, matches: sameText('button, a, label, span, div, p, td, th, li, h1, h2, h3, h4, h5, h6', 50) });
+    // Last resort, so every recorded step has a locator that matches one element.
+    locators.push({ strategy: 'css', locator: `locator('${quote(cssPath(el))}')`, score: 10, matches: 1 });
 
     return {
       tag: el.tagName,
@@ -193,10 +213,16 @@
       return;
     }
     if (isRecording && !isPaused) {
-      const info = getElementInfo(e.target);
-      recordAction('click', { selector: getBestLocatorText(e.target), locator: info.locators[0]?.locator, elementInfo: info });
+      // A click on an icon or a span inside a button is a click on the button.
+      const target = e.target.closest?.(ACTIONABLE) || e.target;
+      // A click on the page background does nothing a test could repeat.
+      if (target === document.documentElement || target === document.body) return;
+      const info = getElementInfo(target);
+      recordAction('click', { selector: getBestLocatorText(target), locator: info.locators[0]?.locator, elementInfo: info });
     }
   }
+
+  const ACTIONABLE = 'button, a, input, select, textarea, label, summary, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="checkbox"], [role="radio"], [role="option"]';
 
   function onInput(e) {
     if (monitorPanel && monitorPanel.contains(e.target)) return;
@@ -243,8 +269,19 @@
     };
 
     switch (method) {
-      case 'locator':
-        return document.querySelector(value);
+      case 'locator': {
+        // Playwright's text engine: text="Exact text" or text=part of the text
+        const text = /^text=([\s\S]*)$/.exec(value);
+        if (!text) return document.querySelector(value);
+        const exact = /^"([\s\S]*)"$/.exec(text[1]);
+        const wanted = (exact ? exact[1] : text[1]).trim().toLowerCase();
+        const found = [...document.querySelectorAll('body *:not(script):not(style)')].filter(el => {
+          const own = visibleText(el).toLowerCase();
+          return exact ? own === wanted : own.includes(wanted);
+        });
+        // The innermost element with that text
+        return found.find(el => !found.some(other => other !== el && el.contains(other))) || null;
+      }
       case 'getByTestId':
         return document.querySelector(`[data-testid="${value}"]`);
       case 'getByPlaceholder':
