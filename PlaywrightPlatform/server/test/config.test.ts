@@ -43,4 +43,30 @@ describe('loadConfig', () => {
       loadConfig({ DATABASE_URL: 'postgresql://u:p@localhost/db', SECRETS_ENCRYPTION_KEY: '' }),
     ).toThrow(ConfigError);
   });
+
+  it('defaults the Playwright Docker image to the current stable tag', () => {
+    const config = loadConfig({ DATABASE_URL: 'postgresql://u:p@localhost/db', SECRETS_ENCRYPTION_KEY: key });
+    expect(config.playwrightDockerImage).toBe('mcr.microsoft.com/playwright:v1.63.0-noble');
+  });
+
+  it('reads a custom Playwright Docker image', () => {
+    const config = loadConfig({
+      DATABASE_URL: 'postgresql://u:p@localhost/db',
+      SECRETS_ENCRYPTION_KEY: key,
+      PLAYWRIGHT_DOCKER_IMAGE: 'registry.example.com/team/playwright:v1.62.1-jammy',
+    });
+    expect(config.playwrightDockerImage).toBe('registry.example.com/team/playwright:v1.62.1-jammy');
+  });
+
+  it.each([
+    ['a space', 'mcr.microsoft.com/playwright: v1.63.0'],
+    ['a shell metacharacter', 'mcr.microsoft.com/playwright:v1.63.0;rm'],
+    ['no tag', 'mcr.microsoft.com/playwright'],
+    ['a bare name', 'playwright'],
+    ['an empty tag', 'mcr.microsoft.com/playwright:'],
+  ])('rejects a Playwright Docker image with %s', (_label, image) => {
+    expect(() =>
+      loadConfig({ DATABASE_URL: 'postgresql://u:p@localhost/db', SECRETS_ENCRYPTION_KEY: key, PLAYWRIGHT_DOCKER_IMAGE: image }),
+    ).toThrow(ConfigError);
+  });
 });

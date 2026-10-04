@@ -38,6 +38,12 @@ const envSchema = z.object({
     .string()
     .default('')
     .refine((v) => v === '' || /^https?:\/\/[^\s]+$/i.test(v), 'must be an http or https URL'),
+  // The Playwright Docker image builds run tests in. A full registry/name:tag
+  // reference: no spaces and no shell metacharacters.
+  PLAYWRIGHT_DOCKER_IMAGE: z
+    .string()
+    .default('mcr.microsoft.com/playwright:v1.63.0-noble')
+    .refine((v) => /^[A-Za-z0-9][A-Za-z0-9._/-]*:[A-Za-z0-9._-]+$/.test(v), 'must be a docker image like registry/name:tag'),
 });
 
 export interface Config {
@@ -55,6 +61,8 @@ export interface Config {
   trustProxy: false | string;
   /** Base URL that Jenkins builds use to call back, without a trailing slash. */
   publicUrl: string;
+  /** The Playwright Docker image builds run tests in. */
+  playwrightDockerImage: string;
 }
 
 export class ConfigError extends Error {
@@ -87,5 +95,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
             .map((entry) => entry.trim())
             .join(','),
     publicUrl: e.PLATFORM_PUBLIC_URL.replace(/\/+$/, '') || `http://127.0.0.1:${e.APP_PORT}`,
+    playwrightDockerImage: e.PLAYWRIGHT_DOCKER_IMAGE,
   };
 }
