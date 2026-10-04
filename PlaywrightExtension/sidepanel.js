@@ -1281,13 +1281,15 @@ function setupProjectsPanel() {
   const batchPanel = $('scripts-batch');
   const batchSummaryEl = $('scripts-batch-summary');
   const batchList = $('scripts-batch-list');
+  const recordInScript = $('script-record');
+  const recordInList = $('scripts-record');
   const required = [
     message, views.list, views.scripts, views.script, projectList, projectName, searchInput, scriptList,
     scriptName, scriptMeta, scriptCode, runBtn, stopBtn, runNote, card, runStatus, runTitle, runCounts,
     runTimes, runError, runLinksEl, runHistory, runResults, deleteBtn, deleteConfirm, deleteYes, deleteNo,
     newProjectBtn, newProjectForm, newProjectName, renameBtn, renameForm, renameName, projectDeleteBtn,
     projectDeleteConfirm, projectDeleteText, editBtn, editForm, editName, editContent, editSummary,
-    batchBar, selectAll, runSelected, batchPanel, batchSummaryEl, batchList,
+    batchBar, selectAll, runSelected, batchPanel, batchSummaryEl, batchList, recordInScript, recordInList,
   ];
   if (required.some((el) => !el)) return;
 
@@ -1349,6 +1351,39 @@ function setupProjectsPanel() {
     return line;
   }
 
+  // --- What a run records for every test: screenshots and video ---
+  // The two boxes appear next to Run in the script view and next to Run selected in the list.
+  // They are one choice, kept between sessions.
+  const RECORD_KEY = 'pas_run_record';
+  function savedRecord() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(RECORD_KEY) || '{}');
+      return { screenshots: saved.screenshots !== false, video: saved.video === true };
+    } catch {
+      return { screenshots: true, video: false };
+    }
+  }
+  state.record = savedRecord();
+  const recordBoxes = [...document.querySelectorAll('.record-shots, .record-video')];
+  function renderRecord() {
+    for (const box of recordBoxes) {
+      box.checked = box.classList.contains('record-shots') ? state.record.screenshots : state.record.video;
+    }
+  }
+  for (const box of recordBoxes) {
+    box.addEventListener('change', () => {
+      const key = box.classList.contains('record-shots') ? 'screenshots' : 'video';
+      state.record = { ...state.record, [key]: box.checked };
+      try {
+        localStorage.setItem(RECORD_KEY, JSON.stringify(state.record));
+      } catch {
+        // The choice still holds for this session.
+      }
+      renderRecord();
+    });
+  }
+  renderRecord();
+
   // --- Several scripts run together, from the list of a project ---
 
   // Whether the open project's scripts may be started by this person.
@@ -1365,6 +1400,7 @@ function setupProjectsPanel() {
     const total = state.listed.length;
     const chosen = state.selected.size;
     show(batchBar, canRunHere() && total > 0);
+    show(recordInList, canRunHere() && total > 0);
     selectAll.checked = total > 0 && chosen === total;
     selectAll.indeterminate = chosen > 0 && chosen < total;
     runSelected.disabled = chosen === 0 || state.batchStarting;
@@ -1424,7 +1460,7 @@ function setupProjectsPanel() {
     // One at a time: Jenkins queues the builds, and a refusal for one script does not stop the rest.
     for (const entry of state.batch) {
       try {
-        entry.execution = await PlatformClient.runScript(entry.id);
+        entry.execution = await PlatformClient.runScript(entry.id, state.record);
       } catch (err) {
         entry.error = err.status === 401 ? EXPIRED : err.message;
       }
@@ -1481,6 +1517,7 @@ function setupProjectsPanel() {
       execution: state.execution,
     });
     show(runBtn, controls.showRun);
+    show(recordInScript, controls.showRun);
     runBtn.disabled = controls.runDisabled;
     show(stopBtn, controls.showStop);
     runNote.textContent = controls.note;
@@ -1825,7 +1862,7 @@ function setupProjectsPanel() {
     runBtn.disabled = true;
     say('Starting the run…');
     try {
-      const execution = await PlatformClient.runScript(state.script.id);
+      const execution = await PlatformClient.runScript(state.script.id, state.record);
       if (turn !== state.turn) return;
       say('');
       state.runs = [execution, ...state.runs].slice(0, 10);

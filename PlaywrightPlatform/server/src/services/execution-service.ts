@@ -65,6 +65,17 @@ export interface RunReport {
 
 export type ReportKind = 'playwright' | 'allure';
 
+/**
+ * What a run records for every test, chosen by the person who starts it. A failed test keeps
+ * its screenshot and video either way.
+ */
+export interface RunRecording {
+  screenshots: boolean;
+  video: boolean;
+}
+
+const DEFAULT_RECORDING: RunRecording = { screenshots: true, video: false };
+
 /** Where a run's report page and its two reports open; each null when there is nothing to open. */
 export interface ReportLinks {
   overview: string | null;
@@ -178,7 +189,7 @@ export class ExecutionService {
    * Records the run, then asks Jenkins to start it. If Jenkins refuses, the run stays in
    * history as ERROR and the caller gets the reason.
    */
-  async run(actor: Actor, scriptId: number): Promise<Execution> {
+  async run(actor: Actor, scriptId: number, record: RunRecording = DEFAULT_RECORDING): Promise<Execution> {
     const script = await this.scripts.findLive(scriptId);
     if (!script) throw notFound('Script');
     if (script.projectStatus !== 'ACTIVE') throw projectNotActive();
@@ -228,6 +239,8 @@ export class ExecutionService {
         // So the reports say which script, version, and run they show.
         RUN_LABEL: runLabel(created.id, created.name, created.version),
         SPEC_NAME: specName(created.name),
+        SCREENSHOTS: record.screenshots ? 'on' : 'off',
+        VIDEO: record.video ? 'on' : 'off',
       });
       await this.executions.updateActive(created.id, { queueId });
     } catch (err) {

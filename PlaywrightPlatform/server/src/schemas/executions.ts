@@ -26,6 +26,12 @@ export const reportLinksResponse = z.object({
   reports: z.object({ overview: reportLink, playwright: reportLink, allure: reportLink }),
 });
 
+/** What to record for every test of a run. Unknown keys are dropped. */
+export const runScriptBody = z.object({
+  screenshots: z.boolean().default(true),
+  video: z.boolean().default(false),
+});
+
 /** The run's own report page: only the signed link token. */
 export const reportOverviewParams = z.object({ token: z.string().min(1).max(200) });
 

@@ -54,6 +54,8 @@ describe('executions: start and read a run', () => {
     // What the reports call the run, and what the test file is named in the build.
     expect(stub.lastParams.RUN_LABEL).toBe('Run #1 - Login Test - v1');
     expect(stub.lastParams.SPEC_NAME).toBe('login-test');
+    // Started without a choice: a screenshot of every test, and video for failed tests only.
+    expect(stub.lastParams).toMatchObject({ SCREENSHOTS: 'on', VIDEO: 'off' });
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
     const [row] = await rows();
@@ -69,6 +71,26 @@ describe('executions: start and read a run', () => {
     const audit = await world.ctx.db('audit_logs').where({ action: 'execution.run' }).first();
     expect(audit.resource_id).toBe('1');
     expect(JSON.stringify(audit)).not.toContain(token);
+  });
+
+  it('passes on what the person chose to record for every test', async () => {
+    const start = (payload: object) =>
+      world.ctx.app.inject({ method: 'POST', url: `/api/scripts/${world.scriptId}/run`, headers: world.asUser, payload });
+    const finishLast = async () => {
+      await world.ctx.db('test_executions').update({ status: 'ABORTED', stage: 'COMPLETED' });
+    };
+
+    expect((await start({ screenshots: false, video: true })).statusCode).toBe(201);
+    expect(stub.lastParams).toMatchObject({ SCREENSHOTS: 'off', VIDEO: 'on' });
+    await finishLast();
+
+    expect((await start({ screenshots: true, video: true, anything: 'else' })).statusCode).toBe(201);
+    expect(stub.lastParams).toMatchObject({ SCREENSHOTS: 'on', VIDEO: 'on' });
+    await finishLast();
+
+    // Only true and false are a choice.
+    const bad = await start({ video: 'on; rm -rf /' });
+    expect(bad.statusCode).toBe(400);
   });
 
   it('records the version that was current when Run was pressed', async () => {

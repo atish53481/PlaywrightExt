@@ -209,13 +209,20 @@ describe('pipeline text', () => {
     // The report, and the screenshot, video, and trace of each failed test.
     expect(post).toContain("archiveArtifacts artifacts: 'playwright-report/**, allure-report/**, test-results/**'");
     // The Allure report: results written by the reporter, then one HTML file made from them, in the container.
-    expect(script).toContain("[\\'allure-playwright\\', { resultsDir: \\'allure-results\\'");
+    expect(script).toContain("[\\'allure-playwright\\', {");
+    expect(script).toContain("resultsDir: \\'allure-results\\'");
     expect(script).toContain('[ -d allure-results ] && npx allure generate allure-results; exit $rc');
     expect(script).toContain("writeFile file: 'allurerc.mjs'");
     expect(script).toContain('singleFile: true');
     expect(script).not.toMatch(/^\s*(bat|sh)[ (][^\n]*'[^'\n]*npx allure/m);
-    // A screenshot of every test, so a passed run can be shown to have done its work.
-    expect(script).toContain("screenshot: \\'on\\'");
+    // Every test gets a screenshot or a video only when the run asks; a failed test keeps both anyway.
+    expect(script).toContain("screenshot: record.screenshots ? \\'on\\' : \\'only-on-failure\\'");
+    expect(script).toContain("video: record.video ? \\'on\\' : \\'retain-on-failure\\'");
+    // The choice reaches the build as two booleans in a file: only "on" switches one on.
+    expect(script).toContain(
+      "writeFile file: 'run-options.json', text: '{\"screenshots\":' + (params.SCREENSHOTS == 'on') + ',\"video\":' + (params.VIDEO == 'on') + '}'",
+    );
+    for (const line of script.split('\n').filter((l) => /\b(sh|bat)\b/.test(l))) expect(line).not.toMatch(/SCREENSHOTS|VIDEO/);
     // Each test's own result travels with the counts.
     expect(script).toContain('tests: collectTests(report.suites, [], [])');
   });
@@ -258,9 +265,12 @@ describe('pipeline text', () => {
     expect(runLabel(7, 'n'.repeat(500), 3).length).toBeLessThan(130);
   });
 
-  it('wraps the pipeline in a job definition with six parameters declared and markup escaped', () => {
+  it('wraps the pipeline in a job definition with eight parameters declared and markup escaped', () => {
     const xml = jobConfigXml(IMAGE);
-    expect(xml.match(/<name>/g)).toHaveLength(6);
+    expect(xml.match(/<name>/g)).toHaveLength(8);
+    // A build started by hand in Jenkins records as a run started without a choice does.
+    expect(xml).toMatch(/<name>SCREENSHOTS<\/name>\s*<defaultValue>on<\/defaultValue>/);
+    expect(xml).toMatch(/<name>VIDEO<\/name>\s*<defaultValue>off<\/defaultValue>/);
     expect(xml).toContain('<name>RUN_LABEL</name>');
     expect(xml).toContain('<name>SPEC_NAME</name>');
     expect(xml).toContain('<name>EXECUTION_ID</name>');

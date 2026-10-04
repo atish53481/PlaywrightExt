@@ -580,6 +580,12 @@
               <label class="pick-all"><input type="checkbox" id="scripts-select-all"> Select all</label>
               <button class="btn btn-primary btn-sm" id="scripts-run-selected" disabled>▶ Run selected on Jenkins</button>
             </div>
+            <div class="record-options" id="scripts-record" style="display:none">
+              <span class="record-title">Record in the reports, for every test:</span>
+              <label class="pick-all"><input type="checkbox" class="record-shots" checked> 📸 Screenshots</label>
+              <label class="pick-all"><input type="checkbox" class="record-video"> 🎥 Video</label>
+              <span class="record-note">A failed test keeps both, whatever is ticked.</span>
+            </div>
             <div class="manage-form" id="scripts-batch" style="display:none">
               <div id="scripts-batch-summary" role="status"></div>
               <div class="item-list" id="scripts-batch-list"></div>
@@ -647,6 +653,12 @@
             <div class="btn-row"><button class="btn btn-secondary btn-sm" id="script-back">← Scripts</button></div>
             <div class="script-title" id="script-name"></div>
             <div class="script-meta" id="script-meta"></div>
+            <div class="record-options" id="script-record" style="display:none">
+              <span class="record-title">Record in the reports, for every test:</span>
+              <label class="pick-all"><input type="checkbox" class="record-shots" checked> 📸 Screenshots</label>
+              <label class="pick-all"><input type="checkbox" class="record-video"> 🎥 Video</label>
+              <span class="record-note">A failed test keeps both, whatever is ticked.</span>
+            </div>
             <div class="btn-row">
               <button class="btn btn-primary" id="script-run" style="display:none">▶ Run on Jenkins</button>
               <button class="btn btn-danger" id="script-stop" style="display:none">⏹ Stop</button>

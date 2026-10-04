@@ -243,6 +243,12 @@ select option { background: var(--bg3); }
 .pick-row .item { flex: 1; min-width: 0; }
 .pick-row input, .pick-all input { width: 16px; height: 16px; flex: none; accent-color: var(--accent); cursor: pointer; }
 .pick-all { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
+.record-options {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 10px; font-size: 12px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.record-title { flex-basis: 100%; font-size: 11px; color: var(--text2); }
+.record-note { flex-basis: 100%; font-size: 11px; color: var(--text3); }
 .save-banner {
   font-size: 12px; line-height: 1.45; color: var(--text); margin: 8px 0 4px; padding: 8px 10px;
   border: 1px solid var(--accent); border-left-width: 4px; border-radius: var(--radius); background: var(--bg2);

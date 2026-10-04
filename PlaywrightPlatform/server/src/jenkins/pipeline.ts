@@ -55,17 +55,28 @@ const PLAYWRIGHT_CONFIG = `import fs from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
 
 const label = fs.existsSync('run-label.txt') ? fs.readFileSync('run-label.txt', 'utf8').trim() : '';
+// What the person who started the run asked to be recorded for every test. A failed test
+// keeps its screenshot, video, and trace whatever was asked.
+const record = fs.existsSync('run-options.json') ? JSON.parse(fs.readFileSync('run-options.json', 'utf8')) : {};
+const every = (wanted) => (wanted ? 'every test' : 'failed tests only');
 
 export default defineConfig({
   testDir: 'tests',
   reporter: [
     ['html', { open: 'never', title: label || undefined }],
     ['json', { outputFile: 'results.json' }],
-    ['allure-playwright', { resultsDir: 'allure-results', environmentInfo: { Run: label, Browser: 'Chromium (headless)' } }],
+    ['allure-playwright', {
+      resultsDir: 'allure-results',
+      environmentInfo: { Run: label, Browser: 'Chromium (headless)', Screenshots: every(record.screenshots), Video: every(record.video) },
+    }],
   ],
-  metadata: { run: label },
-  // A screenshot of every test's last page, and for a failed test its video and trace too.
-  use: { headless: true, screenshot: 'on', video: 'retain-on-failure', trace: 'retain-on-failure' },
+  metadata: { run: label, screenshots: every(record.screenshots), video: every(record.video) },
+  use: {
+    headless: true,
+    screenshot: record.screenshots ? 'on' : 'only-on-failure',
+    video: record.video ? 'on' : 'retain-on-failure',
+    trace: 'retain-on-failure',
+  },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 });
 `;
@@ -228,6 +239,8 @@ pipeline {
         script {
           // What the reports call this run. Written as a file: it never meets a shell.
           writeFile file: 'run-label.txt', text: (params.RUN_LABEL ?: '')
+          // Whether every test gets a screenshot and a video. Only "on" switches one on, so the file holds two booleans and nothing else.
+          writeFile file: 'run-options.json', text: '{"screenshots":' + (params.SCREENSHOTS == 'on') + ',"video":' + (params.VIDEO == 'on') + '}'
           // The test file is named after the script, so the reports show that name. The name
           // becomes part of a command line, so anything but a plain slug falls back to "script".
           def spec = (params.SPEC_NAME ?: '') ==~ /[a-z0-9][a-z0-9-]{0,60}/ ? params.SPEC_NAME : 'script'
@@ -317,6 +330,16 @@ export function jobConfigXml(image: string): string {
         <hudson.model.StringParameterDefinition>
           <name>SPEC_NAME</name>
           <defaultValue>script</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>SCREENSHOTS</name>
+          <defaultValue>on</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>VIDEO</name>
+          <defaultValue>off</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
       </parameterDefinitions>

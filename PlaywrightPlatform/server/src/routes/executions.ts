@@ -12,6 +12,7 @@ import {
   reportFileParams,
   reportLinksResponse,
   reportOverviewParams,
+  runScriptBody,
   resultParams,
   runReportBody,
   toExecutionDto,
@@ -42,7 +43,9 @@ function reportedBuildNumber(req: FastifyRequest): number | null {
 export async function executionRoutes(app: FastifyInstance, deps: ExecutionRouteDeps): Promise<void> {
   app.post('/scripts/:id/run', { preHandler: writers }, async (req, reply) => {
     const { id } = parse(idParams, req.params);
-    const execution = await deps.executions.run(actorOf(req), id);
+    // The body is optional: a run started without one records a screenshot of every test and no video.
+    const record = parse(runScriptBody, req.body ?? {});
+    const execution = await deps.executions.run(actorOf(req), id, record);
     return reply.status(201).send(shape(executionResponse, { execution: toExecutionDto(execution) }));
   });
 

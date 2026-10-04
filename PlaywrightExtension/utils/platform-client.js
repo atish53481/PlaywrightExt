@@ -333,10 +333,14 @@ export function createPlatformClient({ fetchFn, storage }) {
     },
 
     // Starts a run of the script's current version on Jenkins and returns the run.
-    async runScript(scriptId) {
+    // `record` says what every test of the run gets: { screenshots, video }, both true or false.
+    // Without it the server's own choice applies. A failed test keeps both either way.
+    async runScript(scriptId, record = null) {
       positiveId(scriptId, 'Choose a script.');
       const platform = await signedIn();
-      const { data } = await request(platform.url, `/scripts/${scriptId}/run`, { method: 'POST', token: platform.token });
+      const options = { method: 'POST', token: platform.token };
+      if (record) options.body = { screenshots: Boolean(record.screenshots), video: Boolean(record.video) };
+      const { data } = await request(platform.url, `/scripts/${scriptId}/run`, options);
       return data.execution;
     },
 

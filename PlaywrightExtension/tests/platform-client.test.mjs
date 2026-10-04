@@ -373,3 +373,29 @@ describe('platform client: projects', () => {
     assert.equal(calls.length, 0);
   });
 });
+
+describe('platform client: what a run records', () => {
+  it('sends the choice of screenshots and video with the run, as two booleans', async () => {
+    const calls = [];
+    const client = createPlatformClient({
+      fetchFn: async (url, init) => {
+        calls.push({ url, init });
+        return json(201, { execution: { id: 12, status: 'QUEUED' } });
+      },
+      storage: {
+        getPlatform: async () => ({ url: 'http://localhost:3000', token: 'tok-1', user: USER }),
+        savePlatform: async () => undefined,
+      },
+    });
+
+    await client.runScript(3, { screenshots: true, video: false });
+    await client.runScript(3, { screenshots: 0, video: 'yes', extra: 'dropped' });
+    await client.runScript(3);
+
+    assert.deepEqual(JSON.parse(calls[0].init.body), { screenshots: true, video: false });
+    assert.deepEqual(JSON.parse(calls[1].init.body), { screenshots: false, video: true });
+    // Without a choice no body is sent, and the server applies its own.
+    assert.equal(calls[2].init.body, undefined);
+    for (const call of calls) assert.equal(call.url, 'http://localhost:3000/api/scripts/3/run');
+  });
+});
