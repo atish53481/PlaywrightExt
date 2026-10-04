@@ -1,6 +1,7 @@
 # One-click start for the whole stack: Docker + PostgreSQL, migrations, the
-# platform API, the web app, and the Bridge. Safe to run again: anything already
-# listening on its port is left alone. Run Start.bat to launch this by double-click.
+# platform API, the web app, the Bridge, and the Playwright Docker image that
+# Jenkins runs use. Safe to run again: anything already listening on its port is
+# left alone. Run Start.bat to launch this by double-click.
 
 param([switch]$NoBrowser)
 
@@ -103,6 +104,17 @@ if (-not $jenkins) {
   Ok 'service running'
 } else {
   Write-Host '   service is stopped. Start it from an administrator prompt: Start-Service Jenkins' -ForegroundColor Yellow
+}
+
+Step 'Playwright Docker image (Run on Jenkins runs the tests in it)'
+$image = EnvValue 'PLAYWRIGHT_DOCKER_IMAGE' 'mcr.microsoft.com/playwright:v1.63.0-noble'
+cmd /c "docker image inspect $image >nul 2>&1"
+if ($LASTEXITCODE -eq 0) {
+  Ok "$image is on this machine"
+} else {
+  # 1 to 2 GB: downloaded in a window of its own, so the rest of the start does not wait for it.
+  StartWindow 'Playwright image download' $root "docker pull $image"
+  Write-Host "   downloading $image in its own window; a Jenkins run started before it ends waits for it" -ForegroundColor Yellow
 }
 
 Write-Host "`nAll up." -ForegroundColor Green
