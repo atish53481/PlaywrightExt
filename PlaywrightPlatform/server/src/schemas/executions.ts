@@ -13,6 +13,17 @@ export const resultParams = z.object({
   index: z.coerce.number().int().min(0).max(499),
 });
 
+/** One file of a run's report: the signed link token, which report, and the file inside it. */
+export const reportFileParams = z.object({
+  token: z.string().min(1).max(200),
+  kind: z.enum(['playwright', 'allure']),
+  // A plain relative path: no leading slash, no "..", no drive, no query.
+  '*': z.string().min(1).max(500).regex(/^(?![/\\])(?!.*\.\.)[^\\:?#\u0000]+$/),
+});
+
+const reportLink = z.string().nullable();
+export const reportLinksResponse = z.object({ reports: z.object({ playwright: reportLink, allure: reportLink }) });
+
 const executionDto = z.object({
   id: z.number(),
   projectId: z.number(),

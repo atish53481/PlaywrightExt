@@ -8,7 +8,7 @@ import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
 import { PlatformClient } from './utils/platform-client.js';
 import {
-  countsText, deleteControls, durationText, isFinal, resultRows, runControls, runLinks, runSummary, statusView,
+  countsText, deleteControls, durationText, isFinal, reportLinks, resultRows, runControls, runLinks, runSummary, statusView,
 } from './utils/execution-view.js';
 import { extractCode, looksLikeCode, pickFixedCode, sectionAfter, toSingleFile } from './utils/code-extract.js';
 import { diffStats, lineDiff } from './utils/line-diff.js';
@@ -1486,19 +1486,47 @@ function setupProjectsPanel() {
         duration ? `Took ${duration}` : '',
       ].filter(Boolean).join(' · ');
       runError.textContent = execution.errorMessage || '';
-      runLinksEl.replaceChildren(...runLinks(execution, state.jenkins?.baseUrl || '').map(({ label, href }) => {
-        const link = document.createElement('a');
-        link.className = 'btn btn-secondary btn-sm';
-        link.textContent = label;
-        link.href = href;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        return link;
-      }));
+      drawLinks(execution);
     }
     renderControls();
     renderRuns();
     showResults(execution);
+    loadReports(execution);
+  }
+
+  // The links of the status card: the Jenkins build, and the run's reports once they are known.
+  function drawLinks(execution) {
+    const reports = state.reportsFor === execution.id ? state.reportLinks : [];
+    const links = [...runLinks(execution, state.jenkins?.baseUrl || ''), ...reports];
+    runLinksEl.replaceChildren(...links.map(({ label, href }) => {
+      const link = document.createElement('a');
+      link.className = 'btn btn-secondary btn-sm';
+      link.textContent = label;
+      link.href = href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      return link;
+    }));
+  }
+
+  // Asks the platform where a finished run's reports open. A link works for an hour, so the
+  // answer is kept for half of that.
+  async function loadReports(execution) {
+    if (!execution || !isFinal(execution.status) || !execution.buildNumber) return;
+    if (state.reportsFor === execution.id && Date.now() - state.reportsAt < 30 * 60_000) return;
+    state.reportsFor = execution.id;
+    state.reportsAt = Date.now();
+    state.reportLinks = [];
+    try {
+      const { reports, platformUrl } = await PlatformClient.getReportLinks(execution.id);
+      if (state.reportsFor !== execution.id) return;
+      state.reportLinks = reportLinks(reports, platformUrl);
+    } catch {
+      // The card still shows the run; the reports are asked for again the next time it is drawn.
+      if (state.reportsFor === execution.id) state.reportsFor = null;
+      return;
+    }
+    if (state.execution?.id === execution.id) drawLinks(execution);
   }
 
   async function loadRuns() {

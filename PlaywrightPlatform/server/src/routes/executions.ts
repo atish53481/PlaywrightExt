@@ -8,6 +8,8 @@ import {
   executionResponse,
   executionResultsResponse,
   listExecutionsQuery,
+  reportFileParams,
+  reportLinksResponse,
   resultParams,
   runReportBody,
   toExecutionDto,
@@ -68,6 +70,28 @@ export async function executionRoutes(app: FastifyInstance, deps: ExecutionRoute
       .type(file.contentType)
       .header('Cache-Control', 'private, max-age=3600')
       .header('X-Content-Type-Options', 'nosniff')
+      .send(file.body);
+  });
+
+  app.get('/executions/:id/reports', { preHandler: signedIn }, async (req) => {
+    const { id } = parse(idParams, req.params);
+    return shape(reportLinksResponse, { reports: await deps.executions.reportLinks(id) });
+  });
+
+  // A file of a report. No session guard: the link was signed for a signed-in person and
+  // opens in a tab of its own. The report is produced by a test script, so it is served
+  // sandboxed: its scripts run, but as a page of no origin, without this site's cookies or storage.
+  app.get('/reports/:token/:kind/*', async (req, reply) => {
+    const { token, kind, '*': path } = parse(reportFileParams, req.params);
+    const file = await deps.executions.reportFile(token, kind, path);
+    return reply
+      .type(file.contentType)
+      .header('Content-Security-Policy', 'sandbox allow-scripts allow-popups allow-downloads')
+      // A sandboxed page counts as another origin, even for its own images and videos.
+      .header('Cross-Origin-Resource-Policy', 'cross-origin')
+      .header('Access-Control-Allow-Origin', '*')
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Cache-Control', 'private, max-age=300')
       .send(file.body);
   });
 

@@ -335,6 +335,16 @@ export function createPlatformClient({ fetchFn, storage }) {
       return data.items;
     },
 
+    // Where the reports of a finished run open: { reports: { playwright, allure }, platformUrl }.
+    // Each report is a path on the platform, or null when the build archived no such report.
+    // A link works for an hour and needs no sign-in, so it can open in a tab of its own.
+    async getReportLinks(executionId) {
+      positiveId(executionId, 'Choose a run.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/executions/${executionId}/reports`, { token: platform.token });
+      return { reports: data.reports, platformUrl: platform.url };
+    },
+
     // Deletes a script from the platform, and its builds from Jenkins. Refused with the code
     // RUN_IN_PROGRESS while the script is running.
     async deleteScript(scriptId) {

@@ -144,10 +144,24 @@ export class JenkinsClient {
     await this.call(`${this.job(name)}/${buildNumber}/stop`, { method: 'POST' });
   }
 
+  private artifactPath(name: string, buildNumber: number, path: string): string {
+    return `${this.job(name)}/${buildNumber}/artifact/${path.split('/').map(encodeURIComponent).join('/')}`;
+  }
+
+  /** Whether a build archived a file at this path. */
+  async artifactExists(name: string, buildNumber: number, path: string): Promise<boolean> {
+    try {
+      await this.call(this.artifactPath(name, buildNumber, path), { method: 'HEAD' });
+      return true;
+    } catch (err) {
+      if (err instanceof JenkinsError && err.kind === 'NOT_FOUND') return false;
+      throw err;
+    }
+  }
+
   /** One archived file of a build, read whole. Refused when it is larger than `maxBytes`. */
   async artifact(name: string, buildNumber: number, path: string, maxBytes: number): Promise<{ contentType: string; body: Buffer }> {
-    const encoded = path.split('/').map(encodeURIComponent).join('/');
-    const res = await this.call(`${this.job(name)}/${buildNumber}/artifact/${encoded}`);
+    const res = await this.call(this.artifactPath(name, buildNumber, path));
     const declared = Number(res.headers.get('content-length') ?? 0);
     if (declared > maxBytes) throw new JenkinsError('NOT_FOUND', 'That file is too large to show.');
     const body = Buffer.from(await res.arrayBuffer());

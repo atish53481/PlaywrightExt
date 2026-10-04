@@ -10,6 +10,7 @@ import { createSecretBox } from './crypto/secret-box';
 import type { Db } from './db';
 import { registerAuth } from './plugins/auth';
 import { registerErrorHandling } from './plugins/error-handler';
+import { createReportLinkSigner } from './security/report-links';
 import { createRepos, createTransact } from './repositories';
 import { authRoutes } from './routes/auth';
 import { executionRoutes } from './routes/executions';
@@ -99,7 +100,12 @@ export async function buildApp({ config, db, webRoot, now = Date.now }: AppDeps)
     jenkinsService,
     audit,
     transact,
-    { publicUrl: config.publicUrl, now, playwrightImage: config.playwrightDockerImage },
+    {
+      publicUrl: config.publicUrl,
+      now,
+      playwrightImage: config.playwrightDockerImage,
+      reportLinks: createReportLinkSigner(config.secretsKey),
+    },
     app.log,
   );
 

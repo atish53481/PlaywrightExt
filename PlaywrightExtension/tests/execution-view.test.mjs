@@ -4,6 +4,7 @@ import {
   countsText,
   durationText,
   isFinal,
+  reportLinks,
   runControls,
   runLinks,
   runSummary,
@@ -94,23 +95,50 @@ describe('execution view', () => {
     for (const url of bad) assert.equal(safeJenkinsLink(url, base), null);
   });
 
-  it('offers the Jenkins link once there is a build, and the report link once the tests ran', () => {
+  it('offers the Jenkins link once there is a build, and never the report as Jenkins serves it', () => {
     const urls = {
       buildUrl: 'http://localhost:7070/job/run/41/',
       reportUrl: 'http://localhost:7070/job/run/41/artifact/playwright-report/index.html',
     };
     const jenkins = { label: 'Open in Jenkins', href: urls.buildUrl };
-    const report = { label: 'Open report', href: urls.reportUrl };
 
     assert.deepEqual(runLinks({ status: 'QUEUED', buildUrl: null, reportUrl: null }), []);
     assert.deepEqual(runLinks({ status: 'RUNNING', ...urls }), [jenkins]);
-    assert.deepEqual(runLinks({ status: 'PASSED', ...urls }), [jenkins, report]);
-    assert.deepEqual(runLinks({ status: 'FAILED', ...urls }), [jenkins, report]);
-    assert.deepEqual(runLinks({ status: 'ERROR', ...urls }), [jenkins]);
-    assert.deepEqual(runLinks({ status: 'ABORTED', ...urls }), [jenkins]);
+    // Jenkins shows an archived report with its scripts switched off: a blank page.
+    assert.deepEqual(runLinks({ status: 'PASSED', ...urls }), [jenkins]);
+    assert.deepEqual(runLinks({ status: 'FAILED', ...urls }), [jenkins]);
     assert.deepEqual(runLinks({ status: 'PASSED', buildUrl: 'javascript:alert(1)', reportUrl: 'javascript:alert(2)' }), []);
     assert.deepEqual(runLinks({ status: 'PASSED', ...urls }, 'http://other:8080'), []);
     assert.deepEqual(runLinks(null), []);
+  });
+
+  it('links each report the platform offers, under the platform address only', () => {
+    const platform = 'http://localhost:3000';
+    const playwright = '/api/reports/29.1790000000.abc-DEF_123/playwright/index.html';
+    const allure = '/api/reports/29.1790000000.abc-DEF_123/allure/index.html';
+
+    assert.deepEqual(reportLinks({ playwright, allure }, platform), [
+      { label: 'Playwright report', href: platform + playwright },
+      { label: 'Allure report', href: platform + allure },
+    ]);
+    // A build from before the Allure report was added.
+    assert.deepEqual(reportLinks({ playwright, allure: null }, `${platform}/`), [
+      { label: 'Playwright report', href: platform + playwright },
+    ]);
+
+    const bad = [
+      'javascript:alert(1)',
+      'http://evil.example/api/reports/x/playwright/index.html',
+      '//evil.example/api/reports/x/playwright/index.html',
+      '/api/reports/x/playwright/../../auth/logout',
+      '/api/reports/x/allure/index.html', // the other report's path
+      '',
+      7,
+    ];
+    for (const path of bad) assert.deepEqual(reportLinks({ playwright: path, allure: null }, platform), []);
+    assert.deepEqual(reportLinks({ playwright, allure }, ''), []);
+    assert.deepEqual(reportLinks({ playwright, allure }, 'javascript:alert(1)'), []);
+    assert.deepEqual(reportLinks(null, platform), []);
   });
 
   it('offers Run to ADMIN and USER in an active project once Jenkins is set up', () => {

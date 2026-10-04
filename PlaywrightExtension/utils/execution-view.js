@@ -73,14 +73,34 @@ export function safeJenkinsLink(url, jenkinsBaseUrl = '') {
   return parsed.href;
 }
 
-// The links the status card offers: [{ label, href }]. The report exists only after the tests ran.
+// The links the status card offers: [{ label, href }]. The reports are not among them: Jenkins
+// shows an archived report with its scripts switched off, so they open from the platform
+// (see reportLinks).
 export function runLinks(execution, jenkinsBaseUrl = '') {
   const links = [];
   const build = safeJenkinsLink(execution?.buildUrl, jenkinsBaseUrl);
   if (build) links.push({ label: 'Open in Jenkins', href: build });
-  const testsRan = execution?.status === 'PASSED' || execution?.status === 'FAILED';
-  const report = testsRan ? safeJenkinsLink(execution.reportUrl, jenkinsBaseUrl) : null;
-  if (report) links.push({ label: 'Open report', href: report });
+  return links;
+}
+
+const REPORTS = [
+  ['playwright', 'Playwright report'],
+  ['allure', 'Allure report'],
+];
+
+// The report links of a run: [{ label, href }]. `reports` is the platform's answer,
+// { playwright, allure }, each a path on the platform or null. Only a path of the shape the
+// platform makes is linked, and only under the platform's own address.
+export function reportLinks(reports, platformUrl) {
+  const base = String(platformUrl || '').replace(/\/+$/, '');
+  if (!/^https?:\/\/[^/]+/i.test(base)) return [];
+  const links = [];
+  for (const [kind, label] of REPORTS) {
+    const path = reports?.[kind];
+    if (typeof path !== 'string') continue;
+    if (!new RegExp(`^/api/reports/[A-Za-z0-9._-]+/${kind}/index\\.html$`).test(path)) continue;
+    links.push({ label, href: base + path });
+  }
   return links;
 }
 

@@ -21,7 +21,7 @@ function packageJson(playwrightVersion: string): string {
   return `{
   "name": "playwright-platform-run",
   "private": true,
-  "devDependencies": { "@playwright/test": "${playwrightVersion}" }
+  "devDependencies": { "@playwright/test": "${playwrightVersion}", "allure-playwright": "^3.0.0", "allure": "^3.0.0" }
 }
 `;
 }
@@ -30,7 +30,11 @@ const PLAYWRIGHT_CONFIG = `import { defineConfig, devices } from '@playwright/te
 
 export default defineConfig({
   testDir: 'tests',
-  reporter: [['html', { open: 'never' }], ['json', { outputFile: 'results.json' }]],
+  reporter: [
+    ['html', { open: 'never' }],
+    ['json', { outputFile: 'results.json' }],
+    ['allure-playwright', { resultsDir: 'allure-results' }],
+  ],
   // What a failed test leaves behind for the person reading the report.
   use: { headless: true, screenshot: 'only-on-failure', video: 'retain-on-failure', trace: 'retain-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
@@ -199,7 +203,8 @@ pipeline {
       steps {
         script {
           // The result is written whatever the tests did; the container ends with the tests' own exit code.
-          def code = inImage('npx playwright test; rc=$?; node report-result.cjs; exit $rc')
+          // The Allure report is one HTML file, made here because the agent has no Node.js.
+          def code = inImage('npx playwright test; rc=$?; node report-result.cjs; [ -d allure-results ] && npx allure awesome allure-results --single-file --output allure-report; exit $rc')
           if (code != 0) { currentBuild.result = 'UNSTABLE' }
         }
       }
@@ -216,7 +221,7 @@ pipeline {
           }
         }
       }
-      archiveArtifacts artifacts: 'playwright-report/**, test-results/**', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'playwright-report/**, allure-report/**, test-results/**', allowEmptyArchive: true
     }
   }
 }

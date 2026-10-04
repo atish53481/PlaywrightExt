@@ -12,6 +12,7 @@ import { TagInput } from '../components/TagInput';
 import { saveTextFile } from '../download';
 import { useLoad } from '../hooks/useLoad';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
+import { ScriptRuns } from './ScriptRuns';
 
 /** The fields a user can edit on this page. */
 interface Draft {
@@ -276,6 +277,8 @@ function ScriptEditor({ initial }: { initial: Script }) {
           </div>
         </div>
       )}
+
+      {!editing && <ScriptRuns scriptId={base.id} />}
 
       {confirmDiscard && (
         <ConfirmDialog

@@ -157,6 +157,83 @@ describe('executions: stop and the pipeline endpoints', () => {
     });
   });
 
+  describe('reports', () => {
+    const links = (id: number, headers: Headers = world.asViewer) =>
+      world.ctx.app.inject({ method: 'GET', url: `/api/executions/${id}/reports`, headers });
+    const open = (url: string) => world.ctx.app.inject({ method: 'GET', url });
+    const html = (text: string) => ({ contentType: 'text/html;charset=utf-8', body: Buffer.from(text) });
+
+    it('offers a link for each report the build archived, once the run has finished', async () => {
+      const { id, queueId } = await startRun(world, stub);
+      expect((await links(id)).json().reports).toEqual({ playwright: null, allure: null });
+
+      setBuild(stub, queueId, 41, PASSED_BUILD);
+      await poll(world, id);
+      // A build from before the Allure report was added has only the Playwright one.
+      stub.artifacts.set(`${JOB}/41/playwright-report/index.html`, html('<html><head></head><body>pw</body></html>'));
+      const first = (await links(id)).json().reports;
+      expect(first.playwright).toMatch(/^\/api\/reports\/[^/]+\/playwright\/index\.html$/);
+      expect(first.allure).toBeNull();
+
+      stub.artifacts.set(`${JOB}/41/allure-report/index.html`, html('<html><head></head><body>allure</body></html>'));
+      expect((await links(id)).json().reports.allure).toMatch(/^\/api\/reports\/[^/]+\/allure\/index\.html$/);
+
+      expect((await links(id, {})).statusCode).toBe(401);
+      expect((await links(999_999)).statusCode).toBe(404);
+    });
+
+    it('serves the report through its link, without a session, sandboxed, and able to run', async () => {
+      const { id, queueId } = await startRun(world, stub);
+      setBuild(stub, queueId, 41, PASSED_BUILD);
+      await poll(world, id);
+      stub.artifacts.set(`${JOB}/41/playwright-report/index.html`, html('<html><head><title>r</title></head><body>pw</body></html>'));
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+      // Whatever type Jenkins gives a file, the type sent on comes from its name.
+      stub.artifacts.set(`${JOB}/41/playwright-report/data/shot.png`, { contentType: 'text/html', body: png });
+      const url: string = (await links(id)).json().reports.playwright;
+
+      const page = await open(url);
+      expect(page.statusCode).toBe(200);
+      expect(page.headers['content-type']).toBe('text/html; charset=utf-8');
+      // Not the site's own policy, which would block the report's scripts; and no access to the site.
+      expect(page.headers['content-security-policy']).toBe('sandbox allow-scripts allow-popups allow-downloads');
+      expect(page.body).toMatch(/^<html><head><script>.*localStorage.*<\/script><title>r<\/title>/);
+      expect(page.body).toContain('<body>pw</body>');
+      expect(stub.requests.at(-1)).toMatchObject({ method: 'GET', path: `/job/${JOB}/41/artifact/playwright-report/index.html` });
+
+      const image = await open(url.replace('index.html', 'data/shot.png'));
+      expect(image.statusCode).toBe(200);
+      expect(image.headers['content-type']).toBe('image/png');
+      expect(image.rawPayload.equals(png)).toBe(true);
+
+      expect((await open(url.replace('index.html', 'missing.js'))).statusCode).toBe(404);
+      // The link opens the report folders only, and nothing above them.
+      expect((await open(url.replace('playwright/index.html', 'playwright/..%2F..%2Fconfig.xml'))).statusCode).toBe(400);
+      expect((await open(url.replace('/playwright/', '/other/'))).statusCode).toBe(400);
+    });
+
+    it('refuses a link that was changed, belongs to another run, or has expired', async () => {
+      const { id, queueId } = await startRun(world, stub);
+      setBuild(stub, queueId, 41, PASSED_BUILD);
+      await poll(world, id);
+      stub.artifacts.set(`${JOB}/41/playwright-report/index.html`, html('<html></html>'));
+      const url: string = (await links(id)).json().reports.playwright;
+      const token = url.split('/')[3];
+      const [run, expires, signature] = token.split('.');
+      expect(run).toBe(String(id));
+
+      for (const forged of [`${id + 1}.${expires}.${signature}`, `${run}.${Number(expires) + 60}.${signature}`, 'x']) {
+        const res = await open(url.replace(token, forged));
+        expect(res.statusCode).toBe(401);
+        expect(res.json().error.code).toBe('REPORT_LINK_EXPIRED');
+      }
+
+      expect((await open(url)).statusCode).toBe(200);
+      world.clock.t += 60 * 60_000 + 1_000;
+      expect((await open(url)).statusCode).toBe(401);
+    });
+  });
+
   describe('deleting a script', () => {
     const del = (scriptId: number, headers: Headers = world.asUser) =>
       world.ctx.app.inject({ method: 'DELETE', url: `/api/scripts/${scriptId}`, headers });

@@ -164,7 +164,7 @@ export async function startJenkinsStub(): Promise<JenkinsStub> {
         return send(201, undefined, { Location: `${stub.url}/queue/item/${id}/` });
       }
       const artifactMatch = /^(\d+)\/artifact\/(.+)$/.exec(rest);
-      if (req.method === 'GET' && artifactMatch) {
+      if ((req.method === 'GET' || req.method === 'HEAD') && artifactMatch) {
         const file = stub.artifacts.get(`${job}/${artifactMatch[1]}/${decodeURIComponent(artifactMatch[2])}`);
         if (!file) return send(404);
         res.writeHead(200, { 'Content-Type': file.contentType, 'Content-Length': String(file.body.length) });

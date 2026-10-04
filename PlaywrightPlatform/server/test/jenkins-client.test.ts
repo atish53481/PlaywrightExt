@@ -197,7 +197,11 @@ describe('pipeline text', () => {
     expect(post).toContain('curl -sS -f -X POST -H "Content-Type: application/json" -H "Authorization: Bearer %RUN_TOKEN%" --data-binary @result-body.json "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/result"');
     expect(post).toContain('--data-binary @result-body.json "$PLATFORM_URL/api/executions/$EXECUTION_ID/result"');
     // The report, and the screenshot, video, and trace of each failed test.
-    expect(post).toContain("archiveArtifacts artifacts: 'playwright-report/**, test-results/**'");
+    expect(post).toContain("archiveArtifacts artifacts: 'playwright-report/**, allure-report/**, test-results/**'");
+    // The Allure report: results written by the reporter, then one HTML file made from them, in the container.
+    expect(script).toContain("[\\'allure-playwright\\', { resultsDir: \\'allure-results\\' }]");
+    expect(script).toContain('npx allure awesome allure-results --single-file --output allure-report; exit $rc');
+    expect(script).not.toMatch(/^\s*(bat|sh)[ (][^\n]*'[^'\n]*npx allure/m);
     expect(script).toContain("screenshot: \\'only-on-failure\\'");
     // Each test's own result travels with the counts.
     expect(script).toContain('tests: collectTests(report.suites, [], [])');

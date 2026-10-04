@@ -6,6 +6,7 @@ import type { Transact } from '../repositories';
 import type { AuditRepository } from '../repositories/audit-repository';
 import type { ExecutionPatch, ExecutionRepository, TestResult } from '../repositories/execution-repository';
 import type { ScriptRepository } from '../repositories/script-repository';
+import type { ReportLinkSigner } from '../security/report-links';
 import { hashToken, newToken, safeEqual } from '../security/tokens';
 import type { Actor, Execution, ExecutionStatus } from '../types';
 import type { AuditService } from './audit-service';
@@ -18,6 +19,7 @@ export interface ExecutionOptions {
   now: () => number;
   /** The Playwright Docker image each build runs the tests in. */
   playwrightImage: string;
+  reportLinks: ReportLinkSigner;
 }
 
 function projectNotActive(): AppError {
@@ -58,6 +60,55 @@ export interface RunReport {
     video?: string;
     trace?: string;
   }>;
+}
+
+export type ReportKind = 'playwright' | 'allure';
+
+/** Where the pipeline leaves each report in the build's archive. */
+const REPORT_DIRS: Record<ReportKind, string> = { playwright: 'playwright-report', allure: 'allure-report' };
+const REPORT_LINK_TTL_MS = 60 * 60_000;
+const REPORT_FILE_MAX_BYTES = 50 * 1024 * 1024;
+
+// The type is chosen here from the file's extension, never taken from Jenkins.
+const REPORT_FILE_TYPES: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/plain; charset=utf-8',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+  webm: 'video/webm',
+  mp4: 'video/mp4',
+  zip: 'application/zip',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+};
+
+// A report is served sandboxed (see the route), and a sandboxed page may not touch
+// localStorage. Both report viewers read it on start, so they are given one that lives
+// only as long as the page.
+const STORAGE_SHIM =
+  '<script>(function(){function mem(){var d={};return{getItem:function(k){return Object.prototype.hasOwnProperty.call(d,k)?d[k]:null},' +
+  'setItem:function(k,v){d[k]=String(v)},removeItem:function(k){delete d[k]},clear:function(){d={}},' +
+  'key:function(i){return Object.keys(d)[i]||null},get length(){return Object.keys(d).length}}}' +
+  '["localStorage","sessionStorage"].forEach(function(n){try{window[n].length}catch(e){Object.defineProperty(window,n,{value:mem(),configurable:true})}})})()</script>';
+
+function withStorageShim(html: Buffer): Buffer {
+  const text = html.toString('utf8');
+  const head = /<head[^>]*>/i.exec(text);
+  const at = head ? head.index + head[0].length : 0;
+  return Buffer.from(text.slice(0, at) + STORAGE_SHIM + text.slice(at), 'utf8');
+}
+
+function reportLinkExpired(): AppError {
+  return new AppError(401, 'REPORT_LINK_EXPIRED', 'This report link has expired. Open the report again from the run.');
 }
 
 const SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024;
@@ -324,6 +375,50 @@ export class ExecutionService {
     }
     if (!IMAGE_TYPES.has(file.contentType)) throw notFound('Screenshot');
     return file;
+  }
+
+  /**
+   * Links that open the reports of a finished run, each null when the build archived no such
+   * report. A link works for an hour, without a session: see ReportLinkSigner.
+   */
+  async reportLinks(id: number): Promise<Record<ReportKind, string | null>> {
+    const execution = await this.find(id);
+    const build = execution.buildNumber;
+    if (build === null || !FINAL.has(execution.status)) return { playwright: null, allure: null };
+    const link = await this.jenkins.link();
+    const token = this.options.reportLinks.sign(id, this.options.now() + REPORT_LINK_TTL_MS);
+    const offer = async (kind: ReportKind): Promise<string | null> =>
+      (await link.client.artifactExists(execution.jobName, build, `${REPORT_DIRS[kind]}/index.html`))
+        ? `/api/reports/${token}/${kind}/index.html`
+        : null;
+    try {
+      const [playwright, allure] = await Promise.all([offer('playwright'), offer('allure')]);
+      return { playwright, allure };
+    } catch (err) {
+      throw toAppError(err);
+    }
+  }
+
+  /**
+   * One file of a run's report, fetched from Jenkins with the platform's own credentials.
+   * Jenkins itself serves archived HTML with scripts switched off, which leaves both reports blank.
+   */
+  async reportFile(token: string, kind: ReportKind, path: string): Promise<{ contentType: string; body: Buffer }> {
+    const id = this.options.reportLinks.verify(token, this.options.now());
+    if (id === null) throw reportLinkExpired();
+    const execution = await this.executions.find(id);
+    if (!execution || execution.buildNumber === null) throw notFound('Report');
+    const link = await this.jenkins.link();
+    let file: { body: Buffer };
+    try {
+      file = await link.client.artifact(execution.jobName, execution.buildNumber, `${REPORT_DIRS[kind]}/${path}`, REPORT_FILE_MAX_BYTES);
+    } catch (err) {
+      if (err instanceof JenkinsError && err.kind === 'NOT_FOUND') throw notFound('Report');
+      throw toAppError(err);
+    }
+    const extension = /\.([A-Za-z0-9]+)$/.exec(path)?.[1].toLowerCase() ?? '';
+    const contentType = REPORT_FILE_TYPES[extension] ?? 'application/octet-stream';
+    return { contentType, body: extension === 'html' ? withStorageShim(file.body) : file.body };
   }
 
   /** Refuses when the script has a run that Jenkins has not finished. */
