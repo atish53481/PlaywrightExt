@@ -2,9 +2,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { AppError } from '../errors';
 import { parse, shape } from '../http';
 import { actorOf, signedIn, writers } from '../plugins/auth';
+import { batchReportPage } from '../reports/batch-report-page';
 import { runReportPage } from '../reports/run-report-page';
 import { idParams } from '../schemas/common';
 import {
+  batchReportBody,
+  batchReportResponse,
   executionListResponse,
   executionResponse,
   executionResultsResponse,
@@ -19,6 +22,7 @@ import {
   toResultDto,
 } from '../schemas/executions';
 import type { ExecutionService } from '../services/execution-service';
+import type { Execution } from '../types';
 
 export interface ExecutionRouteDeps {
   executions: ExecutionService;
@@ -41,24 +45,27 @@ function reportedBuildNumber(req: FastifyRequest): number | null {
 }
 
 export async function executionRoutes(app: FastifyInstance, deps: ExecutionRouteDeps): Promise<void> {
+  // A run as the API gives it: with the link to its own report page once it has finished.
+  const dto = (execution: Execution) => toExecutionDto(execution, deps.executions.runReportPath(execution));
+
   app.post('/scripts/:id/run', { preHandler: writers }, async (req, reply) => {
     const { id } = parse(idParams, req.params);
     // The body is optional: a run started without one records a screenshot of every test and no video.
     const record = parse(runScriptBody, req.body ?? {});
     const execution = await deps.executions.run(actorOf(req), id, record);
-    return reply.status(201).send(shape(executionResponse, { execution: toExecutionDto(execution) }));
+    return reply.status(201).send(shape(executionResponse, { execution: dto(execution) }));
   });
 
   app.get('/executions/:id', { preHandler: signedIn }, async (req) => {
     const { id } = parse(idParams, req.params);
-    return shape(executionResponse, { execution: toExecutionDto(await deps.executions.get(id)) });
+    return shape(executionResponse, { execution: dto(await deps.executions.get(id)) });
   });
 
   app.get('/scripts/:id/executions', { preHandler: signedIn }, async (req) => {
     const { id } = parse(idParams, req.params);
     const { limit } = parse(listExecutionsQuery, req.query);
     const items = await deps.executions.list(id, limit);
-    return shape(executionListResponse, { items: items.map(toExecutionDto) });
+    return shape(executionListResponse, { items: items.map(dto) });
   });
 
   app.get('/executions/:id/results', { preHandler: signedIn }, async (req) => {
@@ -81,6 +88,22 @@ export async function executionRoutes(app: FastifyInstance, deps: ExecutionRoute
   app.get('/executions/:id/reports', { preHandler: signedIn }, async (req) => {
     const { id } = parse(idParams, req.params);
     return shape(reportLinksResponse, { reports: await deps.executions.reportLinks(id) });
+  });
+
+  // One page for scripts that were run together. The link is made for a signed-in person and
+  // then opens without a session, like a run's own report page.
+  app.post('/executions/batch-report', { preHandler: signedIn }, async (req) => {
+    const { ids } = parse(batchReportBody, req.body);
+    return shape(batchReportResponse, { url: await deps.executions.batchReportPath(ids) });
+  });
+  app.get('/batch-reports/:token/', async (req, reply) => {
+    const { token } = parse(reportOverviewParams, req.params);
+    const runs = await deps.executions.batchReport(token);
+    return reply
+      .type('text/html; charset=utf-8')
+      .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+      .header('Cache-Control', 'private, no-store')
+      .send(batchReportPage(runs));
   });
 
   // The run's own report page: the run, its tests, and both reports as tabs. Opened through
@@ -120,7 +143,7 @@ export async function executionRoutes(app: FastifyInstance, deps: ExecutionRoute
 
   app.post('/executions/:id/stop', { preHandler: writers }, async (req) => {
     const { id } = parse(idParams, req.params);
-    return shape(executionResponse, { execution: toExecutionDto(await deps.executions.stop(actorOf(req), id)) });
+    return shape(executionResponse, { execution: dto(await deps.executions.stop(actorOf(req), id)) });
   });
 
   // The two routes below are called by the Jenkins build, not by a signed-in person. They

@@ -11,6 +11,10 @@ export interface ReportLinkSigner {
   sign(executionId: number, expiresAt: number): string;
   /** The run a token opens, or null when the token is not ours or has expired. */
   verify(token: string, now: number): number | null;
+  /** A token that opens one page for several runs at once: scripts that were run together. */
+  signBatch(executionIds: number[], expiresAt: number): string;
+  /** The runs a batch token opens, or null when the token is not ours or has expired. */
+  verifyBatch(token: string, now: number): number[] | null;
 }
 
 export function createReportLinkSigner(secretsKey: Buffer): ReportLinkSigner {
@@ -28,6 +32,18 @@ export function createReportLinkSigner(secretsKey: Buffer): ReportLinkSigner {
       if (!safeEqual(match[3], mac(`${match[1]}.${match[2]}`))) return null;
       if (Number(match[2]) * 1000 <= now) return null;
       return Number(match[1]);
+    },
+    // A batch token starts with "b", which no token for one run does, so neither kind can stand in for the other.
+    signBatch(executionIds, expiresAt) {
+      const payload = `b${executionIds.join('-')}.${Math.floor(expiresAt / 1000)}`;
+      return `${payload}.${mac(payload)}`;
+    },
+    verifyBatch(token, now) {
+      const match = /^b([1-9]\d{0,14}(?:-[1-9]\d{0,14}){0,49})\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/.exec(token);
+      if (!match) return null;
+      if (!safeEqual(match[3], mac(`b${match[1]}.${match[2]}`))) return null;
+      if (Number(match[2]) * 1000 <= now) return null;
+      return match[1].split('-').map(Number);
     },
   };
 }

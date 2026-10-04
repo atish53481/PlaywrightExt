@@ -239,8 +239,13 @@ For a script that is already stored:
      tabs. Both reports are titled "Run #38 - <script name> - v2", and the test file in them
      is named after the script. The page opens from the platform, with no Jenkins sign-in.
    - To run several scripts, tick them in the project's script list (or **Select all**) and
-     press **Run selected on Jenkins**. Each script becomes its own run; the list above the
-     scripts shows how each one ended.
+     press **Run selected on Jenkins**. Each script becomes its own run. The list above the
+     scripts shows each one's status with its **Run report** and **Jenkins** links, and
+     **Report for all of them** opens one page for the whole batch.
+   - Before a run, tick **Screenshots** and **Video** to have them recorded for every test
+     and shown in both reports. A failed test keeps both whatever is ticked.
+   - **Run history on Jenkins** in a script lists its last 10 runs, each with its status,
+     counts, duration, and the same two links.
    - **Edit** (ADMIN or USER) changes the script's name or text; new text is saved as the
      next version.
    - An ADMIN adds a project with **New project** in the project list, and renames or deletes

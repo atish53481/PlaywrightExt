@@ -424,6 +424,35 @@ export class ExecutionService {
   }
 
   /**
+   * Where a finished run's own report page opens, or null while the run is unfinished. Made
+   * without asking Jenkins, so it can be given for every run of a list.
+   */
+  runReportPath(execution: Execution): string | null {
+    if (!FINAL.has(execution.status)) return null;
+    return `/api/reports/${this.options.reportLinks.sign(execution.id, this.options.now() + REPORT_LINK_TTL_MS)}/`;
+  }
+
+  /** Where one page for several runs opens: scripts that were run together. Unknown runs are refused. */
+  async batchReportPath(ids: number[]): Promise<string> {
+    const unique = [...new Set(ids)];
+    for (const id of unique) await this.find(id);
+    return `/api/batch-reports/${this.options.reportLinks.signBatch(unique, this.options.now() + REPORT_LINK_TTL_MS)}/`;
+  }
+
+  /** What the page for several runs shows: each run as it is now, with the link to its own report page. */
+  async batchReport(token: string): Promise<Array<{ execution: Execution; reportPath: string | null }>> {
+    const ids = this.options.reportLinks.verifyBatch(token, this.options.now());
+    if (ids === null) throw reportLinkExpired();
+    const runs: Array<{ execution: Execution; reportPath: string | null }> = [];
+    for (const id of ids) {
+      const execution = await this.executions.find(id);
+      if (execution) runs.push({ execution, reportPath: this.runReportPath(execution) });
+    }
+    if (runs.length === 0) throw notFound('Report');
+    return runs;
+  }
+
+  /**
    * What the run's own report page shows: the run, its tests, and which reports the build
    * archived. Opened through a signed link, like the reports themselves. If Jenkins cannot be
    * asked, the page still shows the run, without the reports.

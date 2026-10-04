@@ -258,6 +258,76 @@ describe('executions: stop and the pipeline endpoints', () => {
       expect((await open('/api/reports/not-a-link/')).statusCode).toBe(401);
     });
 
+    it('gives a finished run the link to its report page, in a run and in the history', async () => {
+      const { id, queueId } = await startRun(world, stub);
+      const history = () =>
+        world.ctx.app.inject({ method: 'GET', url: `/api/scripts/${world.scriptId}/executions`, headers: world.asViewer });
+      expect((await poll(world, id)).json().execution.runReportUrl).toBeNull();
+      expect((await history()).json().items[0].runReportUrl).toBeNull();
+
+      setBuild(stub, queueId, 41, PASSED_BUILD);
+      const link: string = (await poll(world, id)).json().execution.runReportUrl;
+      expect(link).toMatch(/^\/api\/reports\/[^/]+\/$/);
+      expect((await history()).json().items[0].runReportUrl).toMatch(/^\/api\/reports\/[^/]+\/$/);
+      // Made without asking Jenkins, and it opens.
+      stub.failWith = 503;
+      expect((await history()).json().items[0].runReportUrl).toMatch(/^\/api\/reports\//);
+      expect((await open(link)).statusCode).toBe(200);
+      stub.failWith = null;
+    });
+
+    it('shows scripts that were run together on one page', async () => {
+      const first = await startRun(world, stub);
+      setBuild(stub, first.queueId, 41, PASSED_BUILD);
+      await poll(world, first.id);
+
+      const other = await newScript(world.ctx, world.asAdmin, world.projectId, { name: 'Check <out>' });
+      const started = await run(world, world.asUser, other.id);
+      const second: number = started.json().execution.id;
+      const row = await world.ctx.db('test_executions').where({ id: second }).first('jenkins_queue_id');
+      await postResult(second, stub.lastParams.RUN_TOKEN, { total: 2, passed: 1, failed: 1, skipped: 0, errorMessage: 'pay: no <button>\nmore' });
+      setBuild(stub, row.jenkins_queue_id, 42, { building: false, result: 'UNSTABLE', duration: 2_000 });
+      await poll(world, second);
+
+      const batch = (payload: object, headers: Headers = world.asViewer) =>
+        world.ctx.app.inject({ method: 'POST', url: '/api/executions/batch-report', headers, payload });
+      const made = await batch({ ids: [first.id, second, first.id] });
+      expect(made.statusCode).toBe(200);
+      const url: string = made.json().url;
+      expect(url).toMatch(/^\/api\/batch-reports\/b[^/]+\/$/);
+
+      const page = await open(url);
+      expect(page.statusCode).toBe(200);
+      expect(page.headers['content-security-policy']).toContain("default-src 'none'");
+      expect(page.body).not.toContain('<script');
+      expect(page.body).toContain('<h1>2 scripts run together</h1>');
+      expect(page.body).toContain('all finished');
+      expect(page.body).toContain('<span class="badge ok">1 passed</span>');
+      expect(page.body).toContain('<span class="badge bad">1 failed</span>');
+      expect(page.body).toContain('Login Test');
+      expect(page.body).toContain('Check &#60;out&#62;');
+      expect(page.body).toContain('pay: no &#60;button&#62;');
+      expect(page.body).not.toContain('more');
+      // Each script links to its own report page, which opens.
+      const links = [...page.body.matchAll(/href="(\/api\/reports\/[^"]+\/)"/g)].map((match) => match[1]);
+      expect(links).toHaveLength(2);
+      expect((await open(links[1])).body).toContain('<h1>Check &#60;out&#62;</h1>');
+
+      expect((await batch({ ids: [first.id] }, {})).statusCode).toBe(401);
+      expect((await batch({ ids: [first.id, 999_999] })).statusCode).toBe(404);
+      expect((await batch({ ids: [] })).statusCode).toBe(400);
+      expect((await batch({ ids: ['1; drop'] })).statusCode).toBe(400);
+
+      // A link for one run does not open the page for several, nor the other way round.
+      const token = url.split('/')[3];
+      const single = links[0].split('/')[3];
+      expect((await open(`/api/batch-reports/${single}/`)).statusCode).toBe(401);
+      expect((await open(`/api/reports/${token}/`)).statusCode).toBe(401);
+      expect((await open(url.replace(/-\d+\./, '-999.'))).statusCode).toBe(401);
+      world.clock.t += 60 * 60_000 + 1_000;
+      expect((await open(url)).statusCode).toBe(401);
+    });
+
     it('says why there is nothing to open when the build archived no report', async () => {
       const { id, queueId } = await startRun(world, stub);
       setBuild(stub, queueId, 41, { building: false, result: 'FAILURE', duration: 1_000 });

@@ -32,6 +32,12 @@ export const runScriptBody = z.object({
   video: z.boolean().default(false),
 });
 
+/** The runs to show together on one page: scripts that were run together. */
+export const batchReportBody = z.object({
+  ids: z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER)).min(1).max(50),
+});
+export const batchReportResponse = z.object({ url: z.string() });
+
 /** The run's own report page: only the signed link token. */
 export const reportOverviewParams = z.object({ token: z.string().min(1).max(200) });
 
@@ -46,6 +52,8 @@ const executionDto = z.object({
   buildNumber: z.number().nullable(),
   buildUrl: z.string().nullable(),
   reportUrl: z.string().nullable(),
+  /** The run's own report page on the platform; null until the run has finished. */
+  runReportUrl: z.string().nullable(),
   total: z.number(),
   passed: z.number(),
   failed: z.number(),
@@ -62,7 +70,7 @@ export const executionResponse = z.object({ execution: executionDto });
 export const executionListResponse = z.object({ items: z.array(executionDto) });
 
 /** The run token's hash is deliberately not part of this shape. */
-export function toExecutionDto(e: Execution): z.infer<typeof executionDto> {
+export function toExecutionDto(e: Execution, runReportUrl: string | null = null): z.infer<typeof executionDto> {
   const build = e.buildNumber;
   return {
     id: e.id,
@@ -76,6 +84,7 @@ export function toExecutionDto(e: Execution): z.infer<typeof executionDto> {
     // Built from the saved Jenkins address each time, so a link always points at the configured server.
     buildUrl: build === null ? null : jenkinsBuildUrl(e.jenkinsBaseUrl, e.jobName, build),
     reportUrl: build === null ? null : jenkinsReportUrl(e.jenkinsBaseUrl, e.jobName, build),
+    runReportUrl,
     total: e.total,
     passed: e.passed,
     failed: e.failed,
