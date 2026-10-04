@@ -127,6 +127,27 @@ describe('executions: sync with Jenkins', () => {
     expect(await scriptState()).toBe('FAILED');
   });
 
+  it('FAILURE without tests keeps the reason the build reported', async () => {
+    const started = await startRun(world, stub);
+    // What the Preflight stage posts when the agent has no Docker.
+    const reason = 'Docker is not available on the Jenkins agent. Start Docker, and check that the account Jenkins runs as may use it.';
+    const posted = await world.ctx.app.inject({
+      method: 'POST',
+      url: `/api/executions/${started.id}/result`,
+      headers: { authorization: `Bearer ${started.token}` },
+      payload: { total: 0, passed: 0, failed: 0, skipped: 0, errorMessage: reason },
+    });
+    expect(posted.statusCode).toBe(204);
+
+    setBuild(stub, started.queueId, nextBuild++, { ...ENDED, result: 'FAILURE' });
+    expect((await poll(world, started.id)).json().execution).toMatchObject({
+      status: 'ERROR',
+      stage: 'COMPLETED',
+      total: 0,
+      errorMessage: reason,
+    });
+  });
+
   it('an aborted build is ABORTED, a build that never ran is ERROR, and neither marks the script', async () => {
     expect((await endWith('ABORTED')).status).toBe('ABORTED');
     expect(await endWith('NOT_BUILT')).toMatchObject({

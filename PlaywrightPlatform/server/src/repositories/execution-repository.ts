@@ -205,12 +205,12 @@ export class ExecutionRepository {
    * Locks an unfinished run until the transaction ends and returns how many tests its build
    * has reported. Null when the run already has a final status.
    */
-  async lockActive(id: number): Promise<{ total: number } | null> {
+  async lockActive(id: number): Promise<{ total: number; errorMessage: string | null } | null> {
     const row = await this.db('test_executions')
       .where({ id })
       .whereIn('status', UNFINISHED)
       .forUpdate()
-      .first('total_tests');
-    return row ? { total: row.total_tests } : null;
+      .first('total_tests', 'error_message');
+    return row ? { total: row.total_tests, errorMessage: row.error_message } : null;
   }
 }

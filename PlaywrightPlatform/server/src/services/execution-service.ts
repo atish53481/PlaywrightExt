@@ -64,6 +64,8 @@ const QUEUE_TIMED_OUT = 'Jenkins did not start the build. Check that an agent is
 interface Outcome {
   status: 'PASSED' | 'FAILED' | 'ABORTED' | 'ERROR';
   errorMessage?: string;
+  /** The message is only a fallback: a reason the build itself reported is kept. */
+  keepReported?: boolean;
 }
 
 /** The final status for a build that ended. `total` is how many tests the build reported back. */
@@ -75,8 +77,9 @@ function outcomeOf(result: BuildState['result'], total: number): Outcome {
       return { status: 'FAILED' };
     case 'FAILURE':
       // The pipeline marks failing tests UNSTABLE, so FAILURE means the build itself broke,
-      // unless it got far enough to report tests.
-      return total > 0 ? { status: 'FAILED' } : { status: 'ERROR', errorMessage: BUILD_FAILED_EARLY };
+      // unless it got far enough to report tests. The build may have said why it broke
+      // (no Docker on the agent, an image that cannot be pulled): that reason is kept.
+      return total > 0 ? { status: 'FAILED' } : { status: 'ERROR', errorMessage: BUILD_FAILED_EARLY, keepReported: true };
     case 'ABORTED':
       return { status: 'ABORTED' };
     default:
@@ -330,7 +333,9 @@ export class ExecutionService {
       if (!reported) return null;
       const outcome = decide(reported.total);
       const patch: ExecutionPatch = { status: outcome.status, stage: 'COMPLETED', callbackTokenHash: null, ...times };
-      if (outcome.errorMessage) patch.errorMessage = outcome.errorMessage;
+      if (outcome.errorMessage && !(outcome.keepReported && reported.errorMessage)) {
+        patch.errorMessage = outcome.errorMessage;
+      }
       await r.executions.updateActive(execution.id, patch);
       if (outcome.status === 'PASSED' || outcome.status === 'FAILED') {
         await r.scripts.markRunResult(execution.scriptId, execution.scriptVersion, outcome.status);
