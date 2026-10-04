@@ -36,6 +36,166 @@ describe('executions: stop and the pipeline endpoints', () => {
     world.ctx.app.inject({ method: 'POST', url: `/api/executions/${id}/result`, headers: bearer(token), payload });
   const stopRequests = () => stub.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/stop'));
 
+  describe('per-test results', () => {
+    const results = (id: number, headers: Headers = world.asViewer) =>
+      world.ctx.app.inject({ method: 'GET', url: `/api/executions/${id}/results`, headers });
+    const tests = [
+      { name: 'login > signs in', status: 'PASSED', durationMs: 1200 },
+      { name: 'login > rejects a bad password', status: 'FAILED', durationMs: 3400, errorMessage: 'expected title' },
+      { name: 'cart > later', status: 'SKIPPED', durationMs: 0 },
+    ];
+
+    it('stores each test the build reports and serves them with the run', async () => {
+      const { id, token } = await startRun(world, stub);
+      const report = { total: 3, passed: 1, failed: 1, skipped: 1, tests };
+      expect((await postResult(id, token, report)).statusCode).toBe(204);
+      // A build that reports twice replaces what it said before.
+      expect((await postResult(id, token, report)).statusCode).toBe(204);
+
+      const res = await results(id);
+      expect(res.statusCode).toBe(200);
+      const none = { screenshotUrl: null, videoUrl: null, traceUrl: null };
+      expect(res.json().items).toEqual([
+        { name: 'login > signs in', status: 'PASSED', durationMs: 1200, errorMessage: null, ...none },
+        { name: 'login > rejects a bad password', status: 'FAILED', durationMs: 3400, errorMessage: 'expected title', ...none },
+        { name: 'cart > later', status: 'SKIPPED', durationMs: 0, errorMessage: null, ...none },
+      ]);
+    });
+
+    it('links a failed test to its screenshot, video, and trace in the Jenkins build', async () => {
+      const { id, queueId, token } = await startRun(world, stub);
+      const failed = {
+        name: 'login > rejects a bad password',
+        status: 'FAILED',
+        durationMs: 10,
+        screenshot: 'test-results/login-rejects-chromium/test-failed-1.png',
+        video: 'test-results/login-rejects-chromium/video.webm',
+        trace: 'test-results/login-rejects-chromium/trace.zip',
+      };
+      // A path that climbs out of the build's files, or is not a relative path, is not kept.
+      const sneaky = { name: 'x', status: 'FAILED', durationMs: 1, screenshot: '../../secrets.png', video: '/etc/passwd', trace: 'C:\\x.zip' };
+      expect((await postResult(id, token, { total: 2, passed: 0, failed: 2, skipped: 0, tests: [failed, sneaky] })).statusCode).toBe(204);
+
+      // Before the build has a number there is nothing to link to.
+      expect((await results(id)).json().items[0]).toMatchObject({ screenshotUrl: null, videoUrl: null, traceUrl: null });
+
+      setBuild(stub, queueId, 41, { building: false, result: 'UNSTABLE', duration: 1_000 });
+      await poll(world, id);
+      const [first, second] = (await results(id)).json().items;
+      const base = `${stub.url}/job/${JOB}/41/artifact/test-results/login-rejects-chromium`;
+      expect(first).toMatchObject({
+        screenshotUrl: `${base}/test-failed-1.png`,
+        videoUrl: `${base}/video.webm`,
+        traceUrl: `${base}/trace.zip`,
+      });
+      expect(second).toMatchObject({ screenshotUrl: null, videoUrl: null, traceUrl: null });
+    });
+
+    it('serves a failed test\'s screenshot from the build, to a signed-in person only', async () => {
+      const { id, queueId, token } = await startRun(world, stub);
+      const shot = 'test-results/login-chromium/test-failed-1.png';
+      const tests = [
+        { name: 'passes', status: 'PASSED', durationMs: 1 },
+        { name: 'fails', status: 'FAILED', durationMs: 1, screenshot: shot },
+      ];
+      await postResult(id, token, { total: 2, passed: 1, failed: 1, skipped: 0, tests });
+      const image = (index: number, headers: Headers = world.asViewer) =>
+        world.ctx.app.inject({ method: 'GET', url: `/api/executions/${id}/results/${index}/screenshot`, headers });
+
+      // No build yet, so nothing to fetch.
+      expect((await image(1)).statusCode).toBe(404);
+
+      setBuild(stub, queueId, 41, { building: false, result: 'UNSTABLE', duration: 1_000 });
+      await poll(world, id);
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+      stub.artifacts.set(`${JOB}/41/${shot}`, { contentType: 'image/png', body: png });
+
+      const res = await image(1);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('image/png');
+      expect(res.rawPayload.equals(png)).toBe(true);
+      // The platform asked Jenkins with its own credentials.
+      expect(stub.requests.at(-1)).toMatchObject({ method: 'GET', path: `/job/${JOB}/41/artifact/${shot}` });
+
+      expect((await image(0)).statusCode).toBe(404); // that test has no screenshot
+      expect((await image(7)).statusCode).toBe(404);
+      expect((await image(1, {})).statusCode).toBe(401);
+
+      // Only an image is passed on, whatever the build archived under that name.
+      stub.artifacts.set(`${JOB}/41/${shot}`, { contentType: 'text/html', body: Buffer.from('<script>1</script>') });
+      expect((await image(1)).statusCode).toBe(404);
+    });
+
+    it('keeps with a run the skills its script version was made with', async () => {
+      const created = await world.ctx.app.inject({
+        method: 'POST',
+        url: `/api/projects/${world.projectId}/skills`,
+        headers: world.asUser,
+        payload: { name: 'Login rules', content: 'Prefer getByRole().' },
+      });
+      const skillId = created.json().skill.id;
+      await world.ctx.db('script_skills').insert({ script_id: world.scriptId, script_version: 1, skill_id: skillId, skill_version: 1 });
+      const { id } = await startRun(world, stub);
+      expect(await world.ctx.db('execution_skill_snapshots').where({ execution_id: id })).toEqual([
+        { execution_id: id, skill_id: skillId, skill_version: 1, skill_name: 'Login rules' },
+      ]);
+    });
+
+    it('needs a session to read results, answers 404 for an unknown run, and an empty list before a report', async () => {
+      const { id } = await startRun(world, stub);
+      expect((await results(id, {})).statusCode).toBe(401);
+      expect((await results(999_999)).statusCode).toBe(404);
+      expect((await results(id)).json().items).toEqual([]);
+    });
+
+    it('refuses a test with an unknown status, and keeps counts when no tests are listed', async () => {
+      const { id, token } = await startRun(world, stub);
+      const bad = { ...COUNTS, tests: [{ name: 'x', status: 'BROKEN', durationMs: 1 }] };
+      expect((await postResult(id, token, bad)).statusCode).toBe(400);
+      expect((await postResult(id, token, COUNTS)).statusCode).toBe(204);
+      expect((await row(id)).total_tests).toBe(1);
+    });
+  });
+
+  describe('deleting a script', () => {
+    const del = (scriptId: number, headers: Headers = world.asUser) =>
+      world.ctx.app.inject({ method: 'DELETE', url: `/api/scripts/${scriptId}`, headers });
+    const deletions = () =>
+      stub.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/doDelete')).map((req) => req.path);
+    const finishedRun = async () => {
+      const { id, queueId } = await startRun(world, stub);
+      setBuild(stub, queueId, 41, PASSED_BUILD);
+      expect((await poll(world, id)).json().execution.status).toBe('PASSED');
+      return Number((await row(id)).script_id);
+    };
+
+    it('removes the script and its builds from Jenkins', async () => {
+      const scriptId = await finishedRun();
+      expect((await del(scriptId)).statusCode).toBe(204);
+      expect(deletions()).toEqual([`/job/${JOB}/41/doDelete`]);
+      expect(stub.builds.has(`${JOB}/41`)).toBe(false);
+      expect((await world.ctx.db('test_scripts').where({ id: scriptId }).first()).status).toBe('DELETED');
+    });
+
+    it('refuses while a run is in progress, and deletes nothing', async () => {
+      const { id } = await startRun(world, stub);
+      const scriptId = Number((await row(id)).script_id);
+      const res = await del(scriptId);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.code).toBe('RUN_IN_PROGRESS');
+      expect((await world.ctx.db('test_scripts').where({ id: scriptId }).first()).status).not.toBe('DELETED');
+      expect(deletions()).toEqual([]);
+    });
+
+    it('still deletes the script when Jenkins cannot be reached', async () => {
+      const scriptId = await finishedRun();
+      stub.failWith = 503;
+      expect((await del(scriptId)).statusCode).toBe(204);
+      stub.failWith = null;
+      expect((await world.ctx.db('test_scripts').where({ id: scriptId }).first()).status).toBe('DELETED');
+    });
+  });
+
   describe('stop', () => {
     it('stops a queued run: taken out of the Jenkins queue and ABORTED at once', async () => {
       const { id, queueId } = await startRun(world, stub);
@@ -138,12 +298,9 @@ describe('executions: stop and the pipeline endpoints', () => {
       expect(edited.statusCode).toBe(200);
       expect((await fetchScript(id, token)).body).toBe(SAMPLE);
 
-      const removed = await world.ctx.app.inject({
-        method: 'DELETE',
-        url: `/api/scripts/${world.scriptId}`,
-        headers: world.asUser,
-      });
-      expect(removed.statusCode).toBe(204);
+      // The API refuses to delete a script while it runs, so the row is marked directly: the
+      // build must still get its script whatever has become of the row.
+      await world.ctx.db('test_scripts').where({ id: world.scriptId }).update({ status: 'DELETED' });
       const archived = await world.ctx.app.inject({
         method: 'PUT',
         url: `/api/projects/${world.projectId}`,

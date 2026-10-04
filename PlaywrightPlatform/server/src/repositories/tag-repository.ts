@@ -30,6 +30,26 @@ export class TagRepository {
     );
   }
 
+  /** Makes `names` the skill's tags, by the same rules as a script's. */
+  async setForSkill(skillId: number, names: string[]): Promise<void> {
+    await this.db('skill_tags').where({ skill_id: skillId }).del();
+    if (names.length === 0) return;
+    const sorted = [...names].sort((a, b) => {
+      const x = a.toLowerCase();
+      const y = b.toLowerCase();
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
+    await this.db.raw(
+      `insert into tags (name) values ${sorted.map(() => '(?)').join(', ')} on conflict (lower(name)) do nothing`,
+      sorted,
+    );
+    await this.db.raw(
+      `insert into skill_tags (skill_id, tag_id)
+       select ?, t.id from tags t where lower(t.name) in (select lower(n) from unnest(?::text[]) as n)`,
+      [skillId, sorted],
+    );
+  }
+
   /** Tag names in alphabetical order, optionally only those containing `search`. */
   async list(search: string | undefined, limit: number): Promise<string[]> {
     const query = this.db('tags').orderByRaw('lower(name) collate "C"').limit(limit);

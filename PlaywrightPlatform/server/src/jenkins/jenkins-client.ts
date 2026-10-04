@@ -83,10 +83,12 @@ export class JenkinsClient {
     return res.headers.get('x-jenkins') ?? 'unknown';
   }
 
-  async hasPlugin(shortName: string): Promise<boolean> {
+  /** The given plugins that Jenkins does not have installed and active. */
+  async missingPlugins(shortNames: string[]): Promise<string[]> {
     const res = await this.call('/pluginManager/api/json?depth=1');
     const data = (await res.json()) as { plugins?: Array<{ shortName: string; active?: boolean }> };
-    return (data.plugins ?? []).some((p) => p.shortName === shortName && p.active !== false);
+    const active = new Set((data.plugins ?? []).filter((p) => p.active !== false).map((p) => p.shortName));
+    return shortNames.filter((name) => !active.has(name));
   }
 
   async jobExists(name: string): Promise<boolean> {
@@ -140,6 +142,27 @@ export class JenkinsClient {
 
   async stopBuild(name: string, buildNumber: number): Promise<void> {
     await this.call(`${this.job(name)}/${buildNumber}/stop`, { method: 'POST' });
+  }
+
+  /** One archived file of a build, read whole. Refused when it is larger than `maxBytes`. */
+  async artifact(name: string, buildNumber: number, path: string, maxBytes: number): Promise<{ contentType: string; body: Buffer }> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    const res = await this.call(`${this.job(name)}/${buildNumber}/artifact/${encoded}`);
+    const declared = Number(res.headers.get('content-length') ?? 0);
+    if (declared > maxBytes) throw new JenkinsError('NOT_FOUND', 'That file is too large to show.');
+    const body = Buffer.from(await res.arrayBuffer());
+    if (body.length > maxBytes) throw new JenkinsError('NOT_FOUND', 'That file is too large to show.');
+    return { contentType: (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase(), body };
+  }
+
+  /** Removes a build with its log and archived report. A build Jenkins no longer has counts as removed. */
+  async deleteBuild(name: string, buildNumber: number): Promise<void> {
+    try {
+      await this.call(`${this.job(name)}/${buildNumber}/doDelete`, { method: 'POST' });
+    } catch (err) {
+      if (err instanceof JenkinsError && err.kind === 'NOT_FOUND') return;
+      throw err;
+    }
   }
 
   /** Jenkins answers 404 once the item has left the queue; that is not a failure to cancel. */

@@ -115,12 +115,37 @@ describe('jenkins settings', () => {
     expect(await ctx.db('jenkins_configurations').first()).toBeUndefined();
   });
 
+  it('accepts a Jenkins that has the pipeline plugins without the "Pipeline" bundle', async () => {
+    stub.plugins = ['workflow-job', 'workflow-cps', 'pipeline-model-definition'];
+    expect((await call('POST', 'test', asAdmin, good())).json()).toMatchObject({
+      ok: true,
+      pipelinePlugin: true,
+      message: 'Connected to Jenkins 2.555.2.',
+    });
+
+    stub.plugins = ['workflow-job', 'workflow-cps'];
+    const partial = (await call('POST', 'test', asAdmin, good())).json();
+    expect(partial).toMatchObject({ ok: true, pipelinePlugin: false });
+    expect(partial.message).toContain('pipeline-model-definition');
+  });
+
   it('tests the saved connection when the body is empty, and needs one to be saved', async () => {
     const none = await call('POST', 'test', asAdmin, {});
     expect(none.statusCode).toBe(409);
     expect(none.json().error.code).toBe('JENKINS_NOT_CONFIGURED');
     await save(good());
     expect((await call('POST', 'test', asAdmin, {})).json().ok).toBe(true);
+  });
+
+  it('never sends the saved token to an address other than the saved one', async () => {
+    await save(good());
+    stub.requests.length = 0;
+    const elsewhere = (await call('POST', 'test', asAdmin, { baseUrl: 'http://127.0.0.1:9' })).json();
+    expect(elsewhere).toMatchObject({ ok: false, message: 'Enter the Jenkins API token to test a different address.' });
+
+    // The saved address with the saved token is the ordinary "test what is saved" case.
+    expect((await call('POST', 'test', asAdmin, { baseUrl: stub.url })).json().ok).toBe(true);
+    expect(stub.requests.every((r) => r.authorization.startsWith('Basic '))).toBe(true);
   });
 
   it('explains a failed connection test without failing the request', async () => {

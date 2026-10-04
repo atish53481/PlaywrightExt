@@ -9,10 +9,17 @@ export function cleanText(schema: z.ZodString) {
 export const roleSchema =z.enum(['ADMIN', 'USER', 'VIEWER']);
 export const userStatusSchema = z.enum(['ACTIVE', 'DISABLED']);
 
-/** Path ids. The upper bound keeps absurd values from reaching PostgreSQL as out-of-range bigints. */
-export const idParams = z.object({
-  id: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-});
+/**
+ * An id in an address: digits only, so "1e2", "0x10", and "01" are not other spellings of an
+ * id. The length keeps absurd values from reaching PostgreSQL as out-of-range bigints.
+ */
+export const pathId = z
+  .string()
+  .regex(/^[1-9]\d{0,15}$/, 'must be a positive whole number')
+  .transform(Number)
+  .pipe(z.number().int().positive().max(Number.MAX_SAFE_INTEGER));
+
+export const idParams = z.object({ id: pathId });
 
 export const userDto = z.object({
   id: z.number(),

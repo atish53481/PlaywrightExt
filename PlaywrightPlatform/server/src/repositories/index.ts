@@ -5,6 +5,7 @@ import { JenkinsRepository } from './jenkins-repository';
 import { ProjectRepository } from './project-repository';
 import { ScriptRepository } from './script-repository';
 import { SessionRepository } from './session-repository';
+import { SkillRepository } from './skill-repository';
 import { TagRepository } from './tag-repository';
 import { UserRepository } from './user-repository';
 
@@ -17,6 +18,7 @@ export interface Repos {
   tags: TagRepository;
   jenkins: JenkinsRepository;
   executions: ExecutionRepository;
+  skills: SkillRepository;
 }
 
 export function createRepos(db: Db): Repos {
@@ -29,6 +31,7 @@ export function createRepos(db: Db): Repos {
     tags: new TagRepository(db),
     jenkins: new JenkinsRepository(db),
     executions: new ExecutionRepository(db),
+    skills: new SkillRepository(db),
   };
 }
 

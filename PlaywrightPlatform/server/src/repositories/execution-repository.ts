@@ -79,6 +79,18 @@ function toExecution(row: ExecutionRow): Execution {
   };
 }
 
+/** How one test of a run ended. */
+export interface TestResult {
+  name: string;
+  status: 'PASSED' | 'FAILED' | 'SKIPPED';
+  durationMs: number;
+  errorMessage: string | null;
+  /** Files the build archived for the test, as paths inside the build's artifacts. */
+  screenshotPath: string | null;
+  videoPath: string | null;
+  tracePath: string | null;
+}
+
 export interface NewExecution {
   projectId: number;
   scriptId: number;
@@ -202,15 +214,61 @@ export class ExecutionRepository {
   }
 
   /**
-   * Locks an unfinished run until the transaction ends and returns how many tests its build
-   * has reported. Null when the run already has a final status.
+   * Locks an unfinished run until the transaction ends and returns what its build has
+   * reported: how many tests, and the error message. Null when the run already has a final status.
    */
-  async lockActive(id: number): Promise<{ total: number } | null> {
+  async lockActive(id: number): Promise<{ total: number; errorMessage: string | null } | null> {
     const row = await this.db('test_executions')
       .where({ id })
       .whereIn('status', UNFINISHED)
       .forUpdate()
-      .first('total_tests');
-    return row ? { total: row.total_tests } : null;
+      .first('total_tests', 'error_message');
+    return row ? { total: row.total_tests, errorMessage: row.error_message } : null;
+  }
+
+  /** Stores the per-test results of a run in place of any it had. */
+  async replaceResults(executionId: number, scriptId: number, results: TestResult[]): Promise<void> {
+    await this.db('execution_results').where({ execution_id: executionId }).delete();
+    if (results.length === 0) return;
+    await this.db('execution_results').insert(
+      results.map((result) => ({
+        execution_id: executionId,
+        script_id: scriptId,
+        test_name: result.name,
+        status: result.status,
+        duration: result.durationMs,
+        error_message: result.errorMessage,
+        screenshot_path: result.screenshotPath,
+        video_path: result.videoPath,
+        trace_path: result.tracePath,
+      })),
+    );
+  }
+
+  /** In the order the build reported them. */
+  async listResults(executionId: number): Promise<TestResult[]> {
+    const rows = await this.db('execution_results')
+      .where({ execution_id: executionId })
+      .orderBy('id')
+      .select('test_name', 'status', 'duration', 'error_message', 'screenshot_path', 'video_path', 'trace_path');
+    return rows.map((row) => ({
+      name: row.test_name,
+      status: row.status,
+      durationMs: Number(row.duration ?? 0),
+      errorMessage: row.error_message,
+      screenshotPath: row.screenshot_path,
+      videoPath: row.video_path,
+      tracePath: row.trace_path,
+    }));
+  }
+
+  /** The Jenkins builds a script's runs produced. */
+  async buildsForScript(scriptId: number): Promise<Array<{ jobName: string; buildNumber: number }>> {
+    const rows: ExecutionRow[] = await this.executions()
+      .where('e.script_id', scriptId)
+      .whereNotNull('e.jenkins_build_number')
+      .select(...COLUMNS)
+      .orderBy('e.id');
+    return rows.map(toExecution).map((e) => ({ jobName: e.jobName, buildNumber: e.buildNumber as number }));
   }
 }

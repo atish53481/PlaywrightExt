@@ -9,6 +9,11 @@ function normalizeUrl(url) {
   if (!/^https?:\/\//i.test(trimmed)) {
     throw new Error('Platform URL must start with http:// or https://');
   }
+  // The password and the session token travel to this address: plain http is for this machine only.
+  const { protocol, hostname } = new URL(trimmed);
+  if (protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(hostname)) {
+    throw new Error('Use https:// for a platform that is not on this computer.');
+  }
   return trimmed;
 }
 
@@ -63,6 +68,10 @@ export function createPlatformClient({ fetchFn, storage }) {
         method: 'POST',
         body: { email, password, client: 'extension' },
       });
+      // Any server can answer 200. Nothing is stored unless the answer is the platform's.
+      if (typeof data?.token !== 'string' || !data.token || typeof data?.user?.email !== 'string') {
+        throw new Error('That address did not answer like the Playwright Platform. Check the URL.');
+      }
       await storage.savePlatform({ url: baseUrl, token: data.token, user: data.user });
       return data.user;
     },
@@ -103,15 +112,136 @@ export function createPlatformClient({ fetchFn, storage }) {
 
     // Creates a script, with its first version, in a project. `source` is GENERATED or RECORDED;
     // `language` is TypeScript or JavaScript.
-    async saveScript(projectId, { name, description = '', content, source, language }) {
+    async saveScript(projectId, { name, description = '', content, source, language, skills = [] }) {
       positiveId(projectId, 'Choose a project.');
       const platform = await signedIn();
+      const body = { name, description, content, source, language };
+      // The skill versions the script was generated with: [{ id, version }].
+      if (skills.length > 0) body.skills = skills;
       const { data } = await request(platform.url, `/projects/${projectId}/scripts`, {
         method: 'POST',
         token: platform.token,
-        body: { name, description, content, source, language },
+        body,
       });
       return data.script;
+    },
+
+    // Changes a stored script. New content needs `baseVersion` (the version it was made from)
+    // and becomes the next version; `healed: true` marks it as an accepted Healer fix. A
+    // script that has moved on meanwhile is refused with the code VERSION_CONFLICT.
+    async updateScript(scriptId, patch) {
+      positiveId(scriptId, 'Choose a script.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/scripts/${scriptId}`, { method: 'PUT', token: platform.token, body: patch });
+      return data.script;
+    },
+
+    // The screenshot the build kept for one test of a run, as a Blob. `index` is the test's
+    // place in the run's results, from 0. The platform fetches it from Jenkins itself.
+    async getScreenshot(executionId, index) {
+      positiveId(executionId, 'Choose a run.');
+      if (!Number.isInteger(index) || index < 0) throw new Error('Choose a test.');
+      const platform = await signedIn();
+      let res;
+      try {
+        res = await fetchFn(`${platform.url}/api/executions/${executionId}/results/${index}/screenshot`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${platform.token}` },
+        });
+      } catch {
+        throw new Error(`Cannot reach the platform at ${platform.url}. Is the server running?`);
+      }
+      if (!res.ok) {
+        const err = new Error('The screenshot is not available.');
+        err.status = res.status;
+        throw err;
+      }
+      return res.blob();
+    },
+
+    // A project's skills: its own and every global one, each with attached, enabled, priority.
+    // `search` matches the name, the description, and the tags.
+    async listProjectSkills(projectId, search = '') {
+      positiveId(projectId, 'Choose a project.');
+      const platform = await signedIn();
+      const text = String(search || '').trim();
+      const query = text ? `?${new URLSearchParams({ search: text })}` : '';
+      const { data } = await request(platform.url, `/projects/${projectId}/skills${query}`, { token: platform.token });
+      return data.items;
+    },
+
+    // What the agents are given: { project, skills: [{ id, name, version, content }] }, enabled skills in order.
+    async getSkillContext(projectId) {
+      positiveId(projectId, 'Choose a project.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/projects/${projectId}/skills/context`, { token: platform.token });
+      return data;
+    },
+
+    // One skill with its text.
+    async getSkill(skillId) {
+      positiveId(skillId, 'Choose a skill.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/skills/${skillId}`, { token: platform.token });
+      return data.skill;
+    },
+
+    // Creates a skill in a project; with `projectId` null, a global one (ADMIN only).
+    async createSkill(projectId, { name, description = '', content, fileName = '', tags = [] }) {
+      if (projectId !== null) positiveId(projectId, 'Choose a project.');
+      const platform = await signedIn();
+      const body = { name, description, content };
+      if (fileName) body.fileName = fileName;
+      if (tags.length > 0) body.tags = tags;
+      const path = projectId === null ? '/skills' : `/projects/${projectId}/skills`;
+      const { data } = await request(platform.url, path, { method: 'POST', token: platform.token, body });
+      return data.skill;
+    },
+
+    // Changes a skill: { name, description, content, changeSummary }. New content becomes a new version.
+    async updateSkill(skillId, patch) {
+      positiveId(skillId, 'Choose a skill.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/skills/${skillId}`, { method: 'PUT', token: platform.token, body: patch });
+      return data.skill;
+    },
+
+    async archiveSkill(skillId) {
+      positiveId(skillId, 'Choose a skill.');
+      const platform = await signedIn();
+      await request(platform.url, `/skills/${skillId}`, { method: 'DELETE', token: platform.token });
+    },
+
+    async listSkillVersions(skillId) {
+      positiveId(skillId, 'Choose a skill.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/skills/${skillId}/versions`, { token: platform.token });
+      return data.items;
+    },
+
+    // Writes an old version's text as a new version and returns the skill.
+    async restoreSkillVersion(skillId, version) {
+      positiveId(skillId, 'Choose a skill.');
+      positiveId(version, 'Choose a version.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/skills/${skillId}/versions/${version}/restore`, {
+        method: 'POST',
+        token: platform.token,
+      });
+      return data.skill;
+    },
+
+    // How one project uses a skill: { attached, enabled, priority }. Attaching is for global skills.
+    async setProjectSkill(projectId, skillId, patch) {
+      positiveId(projectId, 'Choose a project.');
+      positiveId(skillId, 'Choose a skill.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/projects/${projectId}/skills/${skillId}`, {
+        method: 'PUT',
+        token: platform.token,
+        body: patch,
+      });
+      return data.skill;
     },
 
     // A project's scripts, most recently updated first. `search` matches the name,
@@ -195,6 +325,22 @@ export function createPlatformClient({ fetchFn, storage }) {
         token: platform.token,
       });
       return data.execution;
+    },
+
+    // The tests of a run, in the order the build reported them: [{ name, status, durationMs, errorMessage }].
+    async listExecutionResults(executionId) {
+      positiveId(executionId, 'Choose a run.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/executions/${executionId}/results`, { token: platform.token });
+      return data.items;
+    },
+
+    // Deletes a script from the platform, and its builds from Jenkins. Refused with the code
+    // RUN_IN_PROGRESS while the script is running.
+    async deleteScript(scriptId) {
+      positiveId(scriptId, 'Choose a script.');
+      const platform = await signedIn();
+      await request(platform.url, `/scripts/${scriptId}`, { method: 'DELETE', token: platform.token });
     },
 
     // A script's runs, newest first, as stored (Jenkins is not asked). `limit` is 1 to 50.

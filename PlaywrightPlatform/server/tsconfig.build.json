@@ -1,5 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": false, "rootDir": "src", "outDir": "dist", "sourceMap": true },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/scripts/e2e-serve.ts"]
 }

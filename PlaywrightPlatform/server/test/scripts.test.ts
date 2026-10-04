@@ -180,7 +180,11 @@ describe('scripts: create and read', () => {
     // 700,000 three-byte characters: inside the character limit, but a 2.1 MB body.
     const res = await postScript(ctx, asAdmin, projectId, { content: '語'.repeat(700_000) });
     expect(res.statusCode).toBe(413);
-    expect(res.json().error).toMatchObject({ code: 'PAYLOAD_TOO_LARGE', message: 'The request is too large.' });
+    // The message says which limit was hit: the text is inside the character limit.
+    expect(res.json().error).toMatchObject({
+      code: 'PAYLOAD_TOO_LARGE',
+      message: 'The script is too large to save (2 MB at most once encoded).',
+    });
     expect(await ctx.db('test_scripts')).toHaveLength(0);
   });
 
@@ -217,6 +221,11 @@ describe('scripts: create and read', () => {
 
     expect(await ctx.db('tags').orderBy('id').pluck('name')).toEqual(['checkout-flow', 'Smoke', 'v1.2 @nightly_run']);
     expect(await ctx.db('script_tags')).toHaveLength(4);
+  });
+
+  it('accepts tags in writing systems that use combining marks', async () => {
+    const script = await newScript(ctx, asAdmin, projectId, { name: 'C', tags: ['हिन्दी', 'ทดสอบ'] });
+    expect(script.tags).toEqual(expect.arrayContaining(['हिन्दी', 'ทดสอบ']));
   });
 
   it('rejects invalid tags and allows exactly twenty', async () => {

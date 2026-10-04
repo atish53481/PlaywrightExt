@@ -10,7 +10,9 @@ import type { Actor } from '../types';
 import type { AuditService } from './audit-service';
 
 export const DEFAULT_JOB_NAME = 'playwright-platform-run';
-const PIPELINE_PLUGIN = 'workflow-aggregator';
+// What the generated job needs: a pipeline job, a script definition, and declarative syntax.
+// The "Pipeline" bundle (workflow-aggregator) installs all three but is itself optional.
+const PIPELINE_PLUGINS = ['workflow-job', 'workflow-cps', 'pipeline-model-definition'];
 
 export interface JenkinsSettingsInput {
   baseUrl: string;
@@ -113,7 +115,11 @@ export class JenkinsService {
     const baseUrl = input.baseUrl ?? saved?.baseUrl;
     const username = input.username ?? saved?.username;
     if (!baseUrl || !username) throw notConfigured();
-    const token = input.token ?? (saved?.secretCiphertext ? this.box.decrypt(saved.secretCiphertext) : '');
+    // The saved token belongs to the saved address and is never sent anywhere else.
+    if (!input.token && saved && baseUrl !== saved.baseUrl) {
+      return { ok: false, version: null, pipelinePlugin: false, message: 'Enter the Jenkins API token to test a different address.' };
+    }
+    const token = input.token ??(saved?.secretCiphertext ? this.box.decrypt(saved.secretCiphertext) : '');
     if (!token) return { ok: false, version: null, pipelinePlugin: false, message: 'Enter the Jenkins API token.' };
 
     const client = new JenkinsClient({ baseUrl, username, token });
@@ -127,20 +133,20 @@ export class JenkinsService {
 
     // Listing plugins needs more Jenkins permission than running builds does, so a refusal
     // here is not a failed connection: the plugin simply could not be checked.
-    let pipelinePlugin: boolean | null;
+    let missing: string[] | null;
     try {
-      pipelinePlugin = await client.hasPlugin(PIPELINE_PLUGIN);
+      missing = await client.missingPlugins(PIPELINE_PLUGINS);
     } catch (err) {
       if (!(err instanceof JenkinsError)) throw err;
-      pipelinePlugin = null;
+      missing = null;
     }
     let message = `Connected to Jenkins ${version}.`;
-    if (pipelinePlugin === false) {
-      message = `Connected to Jenkins ${version}, but the Pipeline plugin is not installed. Install "Pipeline" in Jenkins before creating the job.`;
-    } else if (pipelinePlugin === null) {
+    if (missing === null) {
       message = `Connected to Jenkins ${version}. This Jenkins user may not list plugins, so check in Jenkins that "Pipeline" is installed.`;
+    } else if (missing.length > 0) {
+      message = `Connected to Jenkins ${version}, but the Pipeline plugin is not installed (missing: ${missing.join(', ')}). Install "Pipeline" in Jenkins before creating the job.`;
     }
-    return { ok: true, version, pipelinePlugin: pipelinePlugin === true, message };
+    return { ok: true, version, pipelinePlugin: missing !== null && missing.length === 0, message };
   }
 
   async createJob(actor: Actor): Promise<{ created: boolean; jobUrl: string }> {

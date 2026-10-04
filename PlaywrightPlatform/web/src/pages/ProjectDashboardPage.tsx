@@ -3,6 +3,7 @@ import { projectsApi } from '../api/projects';
 import { StatusBadge } from '../components/StatusBadge';
 import { useLoad } from '../hooks/useLoad';
 import { ScriptsTab } from './ScriptsTab';
+import { SkillsTab } from './SkillsTab';
 
 const TABS = ['Overview', 'Scripts', 'Executions', 'CI/CD', 'Reports', 'Skills', 'Settings'] as const;
 type Tab = (typeof TABS)[number];
@@ -20,7 +21,12 @@ export function ProjectDashboardPage() {
   const id = Number(useParams().id);
   const [params, setParams] = useSearchParams();
   const tab: Tab = TABS.find((name) => slug(name) === params.get('tab')) ?? 'Overview';
-  const { data, error, loading, reload } = useLoad(() => projectsApi.get(id), [id]);
+  // An address like /projects/abc names no project; say so instead of sending it to the server.
+  const validId = Number.isInteger(id) && id > 0;
+  const { data, error, loading, reload } = useLoad(
+    () => (validId ? projectsApi.get(id) : Promise.reject(new Error('Project not found.'))),
+    [id],
+  );
 
   function open(name: Tab) {
     // Replaced, not pushed: Back then leaves the project instead of walking through its tabs.
@@ -77,7 +83,8 @@ export function ProjectDashboardPage() {
         </div>
       )}
       {tab === 'Scripts' && <ScriptsTab project={project} />}
-      {tab !== 'Overview' && tab !== 'Scripts' && <p className="muted center">{tab} is not available yet.</p>}
+      {tab === 'Skills' && <SkillsTab project={project} />}
+      {tab !== 'Overview' && tab !== 'Scripts' && tab !== 'Skills' && <p className="muted center">{tab} is not available yet.</p>}
     </>
   );
 }

@@ -31,10 +31,11 @@ describe('jenkins client', () => {
     expect(stub.requests[0].authorization).toBe(`Basic ${Buffer.from('ci-user:ci-token').toString('base64')}`);
   });
 
-  it('reports whether a plugin is installed', async () => {
-    expect(await client.hasPlugin('workflow-aggregator')).toBe(true);
+  it('reports which plugins are missing', async () => {
+    stub.plugins = ['workflow-job'];
+    expect(await client.missingPlugins(['workflow-job', 'workflow-cps'])).toEqual(['workflow-cps']);
     stub.plugins = [];
-    expect(await client.hasPlugin('workflow-aggregator')).toBe(false);
+    expect(await client.missingPlugins(['workflow-job'])).toEqual(['workflow-job']);
   });
 
   it('creates a job that does not exist and updates one that does', async () => {
@@ -103,7 +104,9 @@ describe('pipeline text', () => {
     expect(script).toContain('%PLATFORM_URL%/api/executions/%EXECUTION_ID%/script');
     expect(script).toContain('Authorization: Bearer %RUN_TOKEN%');
     expect(script).toContain('X-Build-Number: %BUILD_NUMBER%');
-    expect(script).toContain("archiveArtifacts artifacts: 'playwright-report/**'");
+    // The report, and the screenshot, video, and trace of each failed test.
+    expect(script).toContain("archiveArtifacts artifacts: 'playwright-report/**, test-results/**'");
+    expect(script).toContain("screenshot: \\'only-on-failure\\'");
     // The @ keeps cmd from echoing the line, which would print the run token in the build log.
     expect(script).toContain("bat '@curl ");
   });

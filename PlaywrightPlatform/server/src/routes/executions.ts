@@ -6,9 +6,12 @@ import { idParams } from '../schemas/common';
 import {
   executionListResponse,
   executionResponse,
+  executionResultsResponse,
   listExecutionsQuery,
+  resultParams,
   runReportBody,
   toExecutionDto,
+  toResultDto,
 } from '../schemas/executions';
 import type { ExecutionService } from '../services/execution-service';
 
@@ -49,6 +52,23 @@ export async function executionRoutes(app: FastifyInstance, deps: ExecutionRoute
     const { limit } = parse(listExecutionsQuery, req.query);
     const items = await deps.executions.list(id, limit);
     return shape(executionListResponse, { items: items.map(toExecutionDto) });
+  });
+
+  app.get('/executions/:id/results', { preHandler: signedIn }, async (req) => {
+    const { id } = parse(idParams, req.params);
+    const { execution, items } = await deps.executions.results(id);
+    return shape(executionResultsResponse, { items: items.map((item) => toResultDto(item, execution)) });
+  });
+
+  // The image itself, so the panel can show it without the viewer being signed in to Jenkins.
+  app.get('/executions/:id/results/:index/screenshot', { preHandler: signedIn }, async (req, reply) => {
+    const { id, index } = parse(resultParams, req.params);
+    const file = await deps.executions.screenshot(id, index);
+    return reply
+      .type(file.contentType)
+      .header('Cache-Control', 'private, max-age=3600')
+      .header('X-Content-Type-Options', 'nosniff')
+      .send(file.body);
   });
 
   app.post('/executions/:id/stop', { preHandler: writers }, async (req) => {

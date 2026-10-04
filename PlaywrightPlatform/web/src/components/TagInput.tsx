@@ -5,7 +5,7 @@ import { useLoad } from '../hooks/useLoad';
 
 const MAX_TAGS = 20;
 // The same rule the server enforces.
-const TAG_PATTERN = /^[\p{L}\p{N} _.@-]{1,40}$/u;
+const TAG_PATTERN = /^[\p{L}\p{M}\p{N} _.@-]{1,40}$/u;
 
 interface Props {
   /** Id of the text box, so a <label htmlFor> can point at it. */

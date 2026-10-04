@@ -15,7 +15,11 @@ export function registerErrorHandling(app: FastifyInstance, options: { spaFallba
       return reply.status(429).send(body('RATE_LIMITED', 'Too many requests. Try again later.'));
     }
     if (status === 413) {
-      return reply.status(413).send(body('PAYLOAD_TOO_LARGE', 'The request is too large.'));
+      // Text within the character limit can still be too many bytes once encoded; say which limit was hit.
+      const message = /\/scripts(\/|$|\?)/.test(req.url)
+        ? 'The script is too large to save (2 MB at most once encoded).'
+        : 'The request is too large.';
+      return reply.status(413).send(body('PAYLOAD_TOO_LARGE', message));
     }
     if (typeof status === 'number' && status >= 400 && status < 500) {
       const message = err instanceof Error ? err.message : 'Bad request.';
@@ -33,7 +37,12 @@ export function registerErrorHandling(app: FastifyInstance, options: { spaFallba
 
   app.setNotFoundHandler((req, reply) => {
     // Client-side routes such as /projects/5 have no file on disk; the SPA handles them.
-    if (options.spaFallback && req.method === 'GET' && !req.url.startsWith('/api')) {
+    // Not the API (/apix is a page, /api and /api/... are not), and not a file: a missing
+    // asset must be a 404, not the page with a 200.
+    const path = req.url.split('?')[0];
+    const isApi = path === '/api' || path.startsWith('/api/');
+    const isFile = /\.[A-Za-z0-9]{1,8}$/.test(path);
+    if (options.spaFallback && req.method === 'GET' && !isApi && !isFile) {
       return reply.type('text/html').sendFile('index.html');
     }
     return reply.status(404).send(body('NOT_FOUND', 'Resource not found.'));

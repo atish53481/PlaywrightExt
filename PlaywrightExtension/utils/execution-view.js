@@ -84,6 +84,60 @@ export function runLinks(execution, jenkinsBaseUrl = '') {
   return links;
 }
 
+const RESULT = {
+  PASSED: { label: 'Passed', tone: 'ok' },
+  FAILED: { label: 'Failed', tone: 'bad' },
+  SKIPPED: { label: 'Skipped', tone: 'off' },
+};
+
+// "850ms", "3.4s", "1m 05s", or "" for a test that took no time (a skipped one).
+function testDurationText(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return durationText(ms);
+}
+
+const ARTIFACTS = [
+  ['screenshotUrl', 'Screenshot'],
+  ['videoUrl', 'Video'],
+  ['traceUrl', 'Trace'],
+];
+
+// The tests of a run as rows for the status card:
+// [{ label, className, name, duration, error, links: [{ label, href }] }].
+// Labels and classes come from the fixed tables above, never from the server's text, and a
+// link to a file of the build is offered only when it is a safe Jenkins link.
+export function resultRows(items, jenkinsBaseUrl = '') {
+  if (!Array.isArray(items)) return [];
+  return items.map((result) => {
+    const known = typeof result?.status === 'string' && Object.hasOwn(RESULT, result.status) ? RESULT[result.status] : null;
+    const links = [];
+    for (const [field, label] of ARTIFACTS) {
+      const href = safeJenkinsLink(result?.[field], jenkinsBaseUrl);
+      if (href) links.push({ label, href });
+    }
+    return {
+      label: known ? known.label : 'Unknown',
+      className: `run-status run-${known ? known.tone : 'off'}`,
+      name: String(result?.name ?? ''),
+      duration: testDurationText(result?.durationMs),
+      error: typeof result?.errorMessage === 'string' ? result.errorMessage : '',
+      links,
+    };
+  });
+}
+
+// Whether the script view offers Delete: { showDelete, deleteDisabled }. Delete is for ADMIN
+// and USER, in an active project, and waits for an unfinished run to end.
+export function deleteControls({ role, projectStatus, execution }) {
+  const canWrite = role === 'ADMIN' || role === 'USER';
+  return {
+    showDelete: canWrite && projectStatus === 'ACTIVE',
+    deleteDisabled: Boolean(execution) && !isFinal(execution.status),
+  };
+}
+
 // What the script view offers: { showRun, runDisabled, showStop, note }. Run is for ADMIN and
 // USER, in an active project, once Jenkins is set up. `note` says why Run is missing.
 export function runControls({ role, projectStatus, jenkinsConfigured, execution }) {
