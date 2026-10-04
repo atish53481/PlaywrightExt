@@ -1,7 +1,7 @@
 # Platform Jenkins Docker Execution — Design
 
 Date: 2026-10-04
-Status: implemented on `feat/platform-jenkins-docker`; the check against a real Jenkins is still open
+Status: implemented on `feat/platform-jenkins-docker`. Checked against a real Jenkins 2.555.2 on Windows (service account LocalSystem, Docker Desktop) on 2026-10-04: builds 30 to 33 covered a passing run, a failing run, a repeat run, and an image that cannot be pulled. Not checked: a Linux agent, and a stopped Docker daemon (the platform database on that machine runs in Docker).
 Follow-up to sub-project 4 ("Platform Jenkins Execution", `docs/superpowers/specs/2026-10-03-platform-jenkins-design.md`). This is not a new sub-project: it changes only *where* the tests execute.
 Source requirements: `../ReqJenkinDocker.md` (one level above this repo), and the owner's direction of 2026-10-04.
 Branch: `feat/platform-jenkins-docker`, cut from `feat/platform-jenkins`.
