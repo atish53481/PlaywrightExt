@@ -330,3 +330,46 @@ describe('platform client', () => {
     assert.equal(calls.length, 0);
   });
 });
+
+describe('platform client: projects', () => {
+  let calls;
+  let client;
+
+  beforeEach(() => {
+    calls = [];
+    client = createPlatformClient({
+      fetchFn: async (url, init) => {
+        calls.push({ url, init });
+        if (init.method === 'DELETE') return { ok: true, status: 204, json: async () => null };
+        return json(200, { project: { id: 7, name: JSON.parse(init.body).name } });
+      },
+      storage: {
+        getPlatform: async () => ({ url: 'http://localhost:3000', token: 'tok-1', user: USER }),
+        savePlatform: async () => undefined,
+      },
+    });
+  });
+
+  it('creates, renames, and deletes a project with the session token', async () => {
+    assert.deepEqual(await client.createProject('Checkout'), { id: 7, name: 'Checkout' });
+    assert.deepEqual(await client.renameProject(7, 'Checkout v2'), { id: 7, name: 'Checkout v2' });
+    await client.deleteProject(7);
+
+    assert.deepEqual(calls.map((call) => `${call.init.method} ${call.url}`), [
+      'POST http://localhost:3000/api/projects',
+      'PUT http://localhost:3000/api/projects/7',
+      'DELETE http://localhost:3000/api/projects/7',
+    ]);
+    assert.deepEqual(JSON.parse(calls[0].init.body), { name: 'Checkout', description: '' });
+    assert.deepEqual(JSON.parse(calls[1].init.body), { name: 'Checkout v2' });
+    for (const call of calls) assert.equal(call.init.headers.Authorization, 'Bearer tok-1');
+  });
+
+  it('refuses an id that is not a positive whole number before any request', async () => {
+    for (const id of [0, -1, 1.5, '7', null]) {
+      await assert.rejects(() => client.renameProject(id, 'x'), /Choose a project/);
+      await assert.rejects(() => client.deleteProject(id), /Choose a project/);
+    }
+    assert.equal(calls.length, 0);
+  });
+});

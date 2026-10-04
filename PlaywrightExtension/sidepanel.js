@@ -8,7 +8,8 @@ import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
 import { PlatformClient } from './utils/platform-client.js';
 import {
-  countsText, deleteControls, durationText, isFinal, reportLinks, resultRows, runControls, runLinks, runSummary, statusView,
+  batchSummary, countsText, deleteControls, durationText, isFinal, manageControls, reportLinks, resultRows, runControls,
+  runLinks, runSummary, statusView,
 } from './utils/execution-view.js';
 import { extractCode, looksLikeCode, pickFixedCode, sectionAfter, toSingleFile } from './utils/code-extract.js';
 import { diffStats, lineDiff } from './utils/line-diff.js';
@@ -1258,10 +1259,35 @@ function setupProjectsPanel() {
   const deleteYes = $('script-delete-yes');
   const deleteNo = $('script-delete-no');
   const healBtn = $('run-heal');
+  // Adding, renaming, and deleting a project (ADMIN), and editing a script (ADMIN and USER).
+  const newProjectBtn = $('project-new');
+  const newProjectForm = $('project-new-form');
+  const newProjectName = $('project-new-name');
+  const renameBtn = $('project-rename');
+  const renameForm = $('project-rename-form');
+  const renameName = $('project-rename-name');
+  const projectDeleteBtn = $('project-delete');
+  const projectDeleteConfirm = $('project-delete-confirm');
+  const projectDeleteText = $('project-delete-text');
+  const editBtn = $('script-edit');
+  const editForm = $('script-edit-form');
+  const editName = $('script-edit-name');
+  const editContent = $('script-edit-content');
+  const editSummary = $('script-edit-summary');
+  // Running several scripts of a project together.
+  const batchBar = $('scripts-batch-bar');
+  const selectAll = $('scripts-select-all');
+  const runSelected = $('scripts-run-selected');
+  const batchPanel = $('scripts-batch');
+  const batchSummaryEl = $('scripts-batch-summary');
+  const batchList = $('scripts-batch-list');
   const required = [
     message, views.list, views.scripts, views.script, projectList, projectName, searchInput, scriptList,
     scriptName, scriptMeta, scriptCode, runBtn, stopBtn, runNote, card, runStatus, runTitle, runCounts,
     runTimes, runError, runLinksEl, runHistory, runResults, deleteBtn, deleteConfirm, deleteYes, deleteNo,
+    newProjectBtn, newProjectForm, newProjectName, renameBtn, renameForm, renameName, projectDeleteBtn,
+    projectDeleteConfirm, projectDeleteText, editBtn, editForm, editName, editContent, editSummary,
+    batchBar, selectAll, runSelected, batchPanel, batchSummaryEl, batchList,
   ];
   if (required.some((el) => !el)) return;
 
@@ -1283,6 +1309,12 @@ function setupProjectsPanel() {
     pollTimer: null,
     pollSeq: 0,       // goes up whenever the watch is restarted or stopped
     searchTimer: null,
+    listed: [],            // the scripts shown in the open project's list
+    selected: new Set(),   // ids of the scripts ticked to run together
+    batch: [],             // the scripts started together: [{ id, name, execution, error }]
+    batchProjectId: null,  // the project that batch belongs to
+    batchStarting: false,  // true while the batch's runs are being started
+    batchTimer: null,
   };
 
   const show = (el, visible) => { el.style.display = visible ? '' : 'none'; };
@@ -1317,7 +1349,98 @@ function setupProjectsPanel() {
     return line;
   }
 
+  // --- Several scripts run together, from the list of a project ---
+
+  // Whether the open project's scripts may be started by this person.
+  function canRunHere() {
+    return runControls({
+      role: state.user?.role,
+      projectStatus: state.project?.status,
+      jenkinsConfigured: Boolean(state.jenkins?.configured),
+      execution: null,
+    }).showRun;
+  }
+
+  function renderBatchBar() {
+    const total = state.listed.length;
+    const chosen = state.selected.size;
+    show(batchBar, canRunHere() && total > 0);
+    selectAll.checked = total > 0 && chosen === total;
+    selectAll.indeterminate = chosen > 0 && chosen < total;
+    runSelected.disabled = chosen === 0 || state.batchStarting;
+    runSelected.textContent = chosen === 0 ? '▶ Run selected on Jenkins' : `▶ Run ${chosen} selected on Jenkins`;
+  }
+
+  // The scripts started together: one line each, opening the script and its run.
+  function renderBatch() {
+    show(batchPanel, state.batch.length > 0);
+    batchSummaryEl.textContent = batchSummary(state.batch);
+    batchList.replaceChildren(...state.batch.map((entry) => {
+      const run = entry.execution;
+      const detail = run
+        ? [statusView(run.status).label, countsText(run), durationText(run.durationMs)].filter(Boolean).join(' · ')
+        : entry.error ? `Not started: ${entry.error}` : 'Starting…';
+      return item(entry.name, detail, () => openScript(entry.id));
+    }));
+  }
+
+  // Asks again every 3 seconds while a script of the batch is unfinished.
+  function watchBatch() {
+    clearTimeout(state.batchTimer);
+    const turn = state.turn;
+    if (!state.batch.some((entry) => entry.execution && !isFinal(entry.execution.status))) return;
+    state.batchTimer = setTimeout(async () => {
+      for (const entry of state.batch) {
+        if (turn !== state.turn) return;
+        if (!entry.execution || isFinal(entry.execution.status)) continue;
+        try {
+          entry.execution = await PlatformClient.getExecution(entry.execution.id);
+        } catch {
+          // Tried again on the next round.
+        }
+      }
+      if (turn !== state.turn) return;
+      renderBatch();
+      watchBatch();
+    }, POLL_MS);
+  }
+
+  selectAll.addEventListener('change', () => {
+    state.selected = new Set(selectAll.checked ? state.listed.map((script) => script.id) : []);
+    for (const box of scriptList.querySelectorAll('input[type="checkbox"]')) box.checked = selectAll.checked;
+    renderBatchBar();
+  });
+
+  runSelected.addEventListener('click', async () => {
+    const chosen = state.listed.filter((script) => state.selected.has(script.id));
+    if (chosen.length === 0 || !state.project) return;
+    const turn = state.turn;
+    clearTimeout(state.batchTimer);
+    state.batchProjectId = state.project.id;
+    state.batch = chosen.map((script) => ({ id: script.id, name: script.name, execution: null, error: '' }));
+    state.batchStarting = true;
+    renderBatchBar();
+    renderBatch();
+    // One at a time: Jenkins queues the builds, and a refusal for one script does not stop the rest.
+    for (const entry of state.batch) {
+      try {
+        entry.execution = await PlatformClient.runScript(entry.id);
+      } catch (err) {
+        entry.error = err.status === 401 ? EXPIRED : err.message;
+      }
+      if (turn !== state.turn) break;
+      renderBatch();
+    }
+    state.batchStarting = false;
+    if (turn !== state.turn) return;
+    state.selected = new Set();
+    for (const box of scriptList.querySelectorAll('input[type="checkbox"]')) box.checked = false;
+    renderBatchBar();
+    watchBatch();
+  });
+
   function stopPolling() {
+    clearTimeout(state.batchTimer);
     clearTimeout(state.pollTimer);
     state.pollTimer = null;
     // A request already on its way cannot be cancelled; its answer is dropped instead.
@@ -1371,6 +1494,19 @@ function setupProjectsPanel() {
     show(deleteBtn, removal.showDelete);
     deleteBtn.disabled = removal.deleteDisabled;
     if (!removal.showDelete || removal.deleteDisabled) show(deleteConfirm, false);
+
+    const canEdit = manageControls({ role: state.user?.role, projectStatus: state.script?.projectStatus }).editScript;
+    show(editBtn, canEdit);
+    if (!canEdit) show(editForm, false);
+  }
+
+  // The project buttons, and their forms closed: called whenever a list is shown.
+  function renderManage() {
+    const admin = manageControls({ role: state.user?.role }).manageProjects;
+    show(newProjectBtn, admin);
+    show(renameBtn, admin);
+    show(projectDeleteBtn, admin);
+    for (const form of [newProjectForm, renameForm, projectDeleteConfirm]) show(form, false);
   }
 
   // Lists the tests of a finished run in the card: the report, inside the panel. Built with
@@ -1567,11 +1703,15 @@ function setupProjectsPanel() {
       return;
     }
     showView('list');
+    renderManage();
     say('Loading…');
     try {
       const projects = await PlatformClient.listProjects();
       if (turn !== state.turn) return;
-      say(projects.length === 0 ? 'No projects yet. An administrator creates them in the platform web app.' : '');
+      const none = state.user.role === 'ADMIN'
+        ? 'No projects yet. Press New project to add one.'
+        : 'No projects yet. An administrator adds them.';
+      say(projects.length === 0 ? none : '');
       projectList.replaceChildren(...projects.map((project) => item(
         project.name,
         `${project.scriptCount} ${project.scriptCount === 1 ? 'script' : 'scripts'}`,
@@ -1596,16 +1736,47 @@ function setupProjectsPanel() {
     state.script = null;
     state.execution = null;
     showView('scripts');
+    renderManage();
     say('Loading…');
     const search = searchInput.value;
     try {
-      const scripts = await PlatformClient.listScripts(state.project.id, search);
+      const [scripts, jenkins] = await Promise.all([
+        PlatformClient.listScripts(state.project.id, search),
+        // Only decides whether scripts can be ticked to run; the list is shown without it.
+        PlatformClient.getJenkinsSettings().catch(() => null),
+      ]);
       if (turn !== state.turn) return;
+      if (jenkins) state.jenkins = jenkins;
       const none = search.trim()
         ? 'No scripts match the search.'
         : 'This project has no scripts yet. Save one from the Generator or Recorder.';
       say(scripts.length === 0 ? none : '');
-      scriptList.replaceChildren(...scripts.map((script) => item(script.name, scriptDetail(script), () => openScript(script.id))));
+      state.listed = scripts;
+      // A tick is kept only for a script that is still in the list.
+      state.selected = new Set(scripts.filter((script) => state.selected.has(script.id)).map((script) => script.id));
+      const pick = canRunHere();
+      scriptList.replaceChildren(...scripts.map((script) => {
+        const open = item(script.name, scriptDetail(script), () => openScript(script.id));
+        if (!pick) return open;
+        const row = document.createElement('div');
+        row.className = 'pick-row';
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = state.selected.has(script.id);
+        box.setAttribute('aria-label', `Select ${script.name} to run`);
+        box.addEventListener('change', () => {
+          if (box.checked) state.selected.add(script.id);
+          else state.selected.delete(script.id);
+          renderBatchBar();
+        });
+        row.append(box, open);
+        return row;
+      }));
+      renderBatchBar();
+      // Scripts started together from this project are shown again, and watched again.
+      if (state.batchProjectId !== state.project.id) state.batch = [];
+      renderBatch();
+      watchBatch();
     } catch (err) {
       if (turn === state.turn) fail(err);
     }
@@ -1619,6 +1790,7 @@ function setupProjectsPanel() {
     state.execution = null;
     state.runs = [];
     show(deleteConfirm, false);
+    show(editForm, false);
     showView(null);
     say('Loading…');
     try {
@@ -1719,6 +1891,123 @@ function setupProjectsPanel() {
       deleteYes.disabled = false;
     }
   });
+
+  // Runs one change against the platform with its button held, and reports a failure in the panel.
+  async function change(button, work) {
+    const turn = state.turn;
+    button.disabled = true;
+    try {
+      await work();
+    } catch (err) {
+      if (turn === state.turn) fail(err);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // --- A new project ---
+  newProjectBtn.addEventListener('click', () => {
+    newProjectName.value = '';
+    show(newProjectForm, true);
+    newProjectName.focus();
+  });
+  $('project-new-cancel')?.addEventListener('click', () => show(newProjectForm, false));
+  $('project-new-save')?.addEventListener('click', (event) => change(event.currentTarget, async () => {
+    const name = newProjectName.value.trim();
+    if (!name) return say('Enter a name for the project.');
+    const project = await PlatformClient.createProject(name);
+    showToast(`Created "${project.name}"`);
+    await openList();
+  }));
+
+  // --- Renaming the open project ---
+  renameBtn.addEventListener('click', () => {
+    if (!state.project) return;
+    show(projectDeleteConfirm, false);
+    renameName.value = state.project.name;
+    show(renameForm, true);
+    renameName.focus();
+  });
+  $('project-rename-cancel')?.addEventListener('click', () => show(renameForm, false));
+  $('project-rename-save')?.addEventListener('click', (event) => change(event.currentTarget, async () => {
+    const project = state.project;
+    const name = renameName.value.trim();
+    if (!project) return;
+    if (!name) return say('Enter a name for the project.');
+    const renamed = await PlatformClient.renameProject(project.id, name);
+    if (state.project?.id !== project.id) return;
+    state.project = { ...project, name: renamed.name };
+    projectName.textContent = renamed.name;
+    show(renameForm, false);
+    say('');
+    showToast(`Renamed to "${renamed.name}"`);
+  }));
+
+  // --- Deleting the open project: asked once more, in the panel itself ---
+  projectDeleteBtn.addEventListener('click', () => {
+    if (!state.project) return;
+    show(renameForm, false);
+    // The list on screen is the whole project unless a search narrows it.
+    const count = searchInput.value.trim() ? Number(state.project.scriptCount) || 0 : state.listed.length;
+    const scripts = count === 0 ? 'It has no scripts.' : `Its ${count} ${count === 1 ? 'script goes' : 'scripts go'} with it.`;
+    projectDeleteText.textContent = `Delete the project "${state.project.name}"? ${scripts}`;
+    show(projectDeleteConfirm, true);
+  });
+  $('project-delete-no')?.addEventListener('click', () => show(projectDeleteConfirm, false));
+  $('project-delete-yes')?.addEventListener('click', (event) => change(event.currentTarget, async () => {
+    const project = state.project;
+    if (!project) return;
+    await PlatformClient.deleteProject(project.id);
+    showToast(`Deleted "${project.name}"`);
+    await openList();
+  }));
+
+  // --- Editing the open script: its name and its text. New text becomes the next version ---
+  editBtn.addEventListener('click', () => {
+    if (!state.script) return;
+    show(deleteConfirm, false);
+    editName.value = state.script.name;
+    editContent.value = state.script.content;
+    editSummary.value = '';
+    show(editForm, true);
+    editContent.focus();
+  });
+  $('script-edit-cancel')?.addEventListener('click', () => show(editForm, false));
+  $('script-edit-save')?.addEventListener('click', (event) => change(event.currentTarget, async () => {
+    const script = state.script;
+    if (!script) return;
+    const name = editName.value.trim();
+    const content = editContent.value;
+    if (!name) return say('Enter a name for the script.');
+    if (!content.trim()) return say('The script cannot be empty.');
+    const patch = {};
+    if (name !== script.name) patch.name = name;
+    if (content !== script.content) {
+      patch.content = content;
+      patch.baseVersion = script.version;
+      if (editSummary.value.trim()) patch.changeSummary = editSummary.value.trim();
+    }
+    if (Object.keys(patch).length === 0) {
+      show(editForm, false);
+      return say('');
+    }
+    let saved;
+    try {
+      saved = await PlatformClient.updateScript(script.id, patch);
+    } catch (err) {
+      // Someone else saved a newer version: the text stays in the form so nothing is lost.
+      if (err.code !== 'VERSION_CONFLICT') throw err;
+      return say(`❌ Someone saved version ${err.details?.currentVersion ?? 'newer'} while you were editing. Copy your text, press Cancel, and open the script again.`);
+    }
+    if (state.script?.id !== script.id) return;
+    state.script = saved;
+    scriptName.textContent = saved.name;
+    scriptMeta.textContent = scriptDetail(saved);
+    scriptCode.textContent = saved.content;
+    show(editForm, false);
+    say('');
+    showToast(saved.version === script.version ? 'Saved' : `Saved as v${saved.version}`);
+  }));
 
   $('projects-refresh')?.addEventListener('click', () => openList());
   $('scripts-back')?.addEventListener('click', () => openList());

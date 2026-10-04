@@ -83,9 +83,11 @@ export function runLinks(execution, jenkinsBaseUrl = '') {
   return links;
 }
 
+// `overview` is the run's own page: the script, the result of each test, and both reports.
 const REPORTS = [
-  ['playwright', 'Playwright report'],
-  ['allure', 'Allure report'],
+  ['overview', 'Run report', ''],
+  ['playwright', 'Playwright report', 'playwright/index\\.html'],
+  ['allure', 'Allure report', 'allure/index\\.html'],
 ];
 
 // The report links of a run: [{ label, href }]. `reports` is the platform's answer,
@@ -95,13 +97,38 @@ export function reportLinks(reports, platformUrl) {
   const base = String(platformUrl || '').replace(/\/+$/, '');
   if (!/^https?:\/\/[^/]+/i.test(base)) return [];
   const links = [];
-  for (const [kind, label] of REPORTS) {
+  for (const [kind, label, file] of REPORTS) {
     const path = reports?.[kind];
     if (typeof path !== 'string') continue;
-    if (!new RegExp(`^/api/reports/[A-Za-z0-9._-]+/${kind}/index\\.html$`).test(path)) continue;
+    if (!new RegExp(`^/api/reports/[A-Za-z0-9._-]+/${file}$`).test(path)) continue;
     links.push({ label, href: base + path });
   }
   return links;
+}
+
+// One line for scripts run together: "4 scripts: 1 running, 2 passed, 1 not started".
+// `entries` is [{ execution, error }]: the run of each script, or why it could not start.
+export function batchSummary(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const counts = new Map();
+  for (const entry of entries) {
+    const label = entry?.execution ? statusView(entry.execution.status).label.toLowerCase() : entry?.error ? 'not started' : 'starting';
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  const order = ['starting', 'queued', 'running', 'passed', 'failed', 'error', 'aborted', 'unknown', 'not started'];
+  const parts = order.filter((label) => counts.has(label)).map((label) => `${counts.get(label)} ${label}`);
+  return `${entries.length} ${entries.length === 1 ? 'script' : 'scripts'}: ${parts.join(', ')}`;
+}
+
+// What the Projects tab offers for changing things: { manageProjects, editScript }.
+// Projects are added, renamed, and deleted by an ADMIN only. A script is edited by ADMIN
+// and USER, in an active project.
+export function manageControls({ role, projectStatus }) {
+  const canWrite = role === 'ADMIN' || role === 'USER';
+  return {
+    manageProjects: role === 'ADMIN',
+    editScript: canWrite && projectStatus === 'ACTIVE',
+  };
 }
 
 const RESULT = {

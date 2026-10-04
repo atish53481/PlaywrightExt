@@ -110,6 +110,37 @@ export function createPlatformClient({ fetchFn, storage }) {
       return data.items;
     },
 
+    // Creates a project and returns it. ADMIN only; a name already in use is refused with
+    // the code PROJECT_NAME_TAKEN.
+    async createProject(name, description = '') {
+      const platform = await signedIn();
+      const { data } = await request(platform.url, '/projects', {
+        method: 'POST',
+        token: platform.token,
+        body: { name, description },
+      });
+      return data.project;
+    },
+
+    // Gives a project a new name and returns it. ADMIN only.
+    async renameProject(projectId, name) {
+      positiveId(projectId, 'Choose a project.');
+      const platform = await signedIn();
+      const { data } = await request(platform.url, `/projects/${projectId}`, {
+        method: 'PUT',
+        token: platform.token,
+        body: { name },
+      });
+      return data.project;
+    },
+
+    // Deletes a project with everything in it. ADMIN only.
+    async deleteProject(projectId) {
+      positiveId(projectId, 'Choose a project.');
+      const platform = await signedIn();
+      await request(platform.url, `/projects/${projectId}`, { method: 'DELETE', token: platform.token });
+    },
+
     // Creates a script, with its first version, in a project. `source` is GENERATED or RECORDED;
     // `language` is TypeScript or JavaScript.
     async saveScript(projectId, { name, description = '', content, source, language, skills = [] }) {

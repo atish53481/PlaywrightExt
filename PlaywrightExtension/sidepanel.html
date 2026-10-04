@@ -534,7 +534,18 @@
           <div id="projects-message" class="projects-message" role="status" style="display:none"></div>
 
           <div class="projects-view" id="projects-view-list" style="display:none">
-            <div class="btn-row"><button class="btn btn-secondary btn-sm" id="projects-refresh">↻ Refresh</button></div>
+            <div class="btn-row">
+              <button class="btn btn-secondary btn-sm" id="projects-refresh">↻ Refresh</button>
+              <button class="btn btn-primary btn-sm" id="project-new" style="display:none">＋ New project</button>
+            </div>
+            <div class="manage-form" id="project-new-form" style="display:none">
+              <label for="project-new-name">Project name</label>
+              <input type="text" id="project-new-name" maxlength="120" placeholder="Checkout">
+              <div class="btn-row">
+                <button class="btn btn-primary btn-sm" id="project-new-save">Create</button>
+                <button class="btn btn-secondary btn-sm" id="project-new-cancel">Cancel</button>
+              </div>
+            </div>
             <div class="item-list" id="projects-list"></div>
           </div>
 
@@ -543,10 +554,35 @@
               <button class="btn btn-secondary btn-sm" id="scripts-back">← Projects</button>
               <span class="crumb" id="scripts-project-name"></span>
               <button class="btn btn-secondary btn-sm" id="scripts-skills">🧠 Skills</button>
+              <button class="btn btn-secondary btn-sm" id="project-rename" style="display:none">✏️ Rename</button>
+              <button class="btn btn-secondary btn-sm" id="project-delete" style="display:none">🗑 Delete project</button>
+            </div>
+            <div class="manage-form" id="project-rename-form" style="display:none">
+              <label for="project-rename-name">New project name</label>
+              <input type="text" id="project-rename-name" maxlength="120">
+              <div class="btn-row">
+                <button class="btn btn-primary btn-sm" id="project-rename-save">Save name</button>
+                <button class="btn btn-secondary btn-sm" id="project-rename-cancel">Cancel</button>
+              </div>
+            </div>
+            <div class="manage-form" id="project-delete-confirm" style="display:none">
+              <div id="project-delete-text"></div>
+              <div class="btn-row">
+                <button class="btn btn-danger btn-sm" id="project-delete-yes">Delete project</button>
+                <button class="btn btn-secondary btn-sm" id="project-delete-no">Cancel</button>
+              </div>
             </div>
             <div class="form-group">
               <label for="scripts-search">Search scripts</label>
               <input type="text" id="scripts-search" maxlength="200" placeholder="Name, description, or tag">
+            </div>
+            <div class="btn-row" id="scripts-batch-bar" style="display:none">
+              <label class="pick-all"><input type="checkbox" id="scripts-select-all"> Select all</label>
+              <button class="btn btn-primary btn-sm" id="scripts-run-selected" disabled>▶ Run selected on Jenkins</button>
+            </div>
+            <div class="manage-form" id="scripts-batch" style="display:none">
+              <div id="scripts-batch-summary" role="status"></div>
+              <div class="item-list" id="scripts-batch-list"></div>
             </div>
             <div class="item-list" id="scripts-list"></div>
           </div>
@@ -614,7 +650,20 @@
             <div class="btn-row">
               <button class="btn btn-primary" id="script-run" style="display:none">▶ Run on Jenkins</button>
               <button class="btn btn-danger" id="script-stop" style="display:none">⏹ Stop</button>
+              <button class="btn btn-secondary" id="script-edit" style="display:none">✏️ Edit</button>
               <button class="btn btn-secondary" id="script-delete" style="display:none">🗑 Delete</button>
+            </div>
+            <div class="manage-form" id="script-edit-form" style="display:none">
+              <label for="script-edit-name">Script name</label>
+              <input type="text" id="script-edit-name" maxlength="200">
+              <label for="script-edit-content">Script</label>
+              <textarea id="script-edit-content" rows="18" maxlength="1000000" spellcheck="false"></textarea>
+              <label for="script-edit-summary">What changed (optional)</label>
+              <input type="text" id="script-edit-summary" maxlength="500">
+              <div class="btn-row">
+                <button class="btn btn-primary btn-sm" id="script-edit-save">Save</button>
+                <button class="btn btn-secondary btn-sm" id="script-edit-cancel">Cancel</button>
+              </div>
             </div>
             <div id="script-delete-confirm" class="projects-message" style="display:none">
               <div>Delete this script from the platform and its builds from Jenkins?</div>
@@ -750,6 +799,10 @@
 <div id="save-project-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;padding:12px">
   <div class="settings-section" role="dialog" aria-modal="true" aria-labelledby="save-project-title" style="width:100%;max-width:360px">
     <h3 id="save-project-title">Save to Project</h3>
+    <div class="save-banner" role="note">
+      <strong>▶ Run on Jenkins:</strong> press <em>Save &amp; Run on Jenkins</em> below, or later open the
+      <strong>Projects</strong> tab, open the script (or tick several), and press <em>Run on Jenkins</em>.
+    </div>
     <div class="form-group">
       <label for="save-project-select">Project</label>
       <select id="save-project-select"></select>

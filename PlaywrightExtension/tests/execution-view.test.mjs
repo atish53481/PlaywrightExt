@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  batchSummary,
   countsText,
   durationText,
   isFinal,
+  manageControls,
   reportLinks,
   runControls,
   runLinks,
@@ -139,6 +141,42 @@ describe('execution view', () => {
     assert.deepEqual(reportLinks({ playwright, allure }, ''), []);
     assert.deepEqual(reportLinks({ playwright, allure }, 'javascript:alert(1)'), []);
     assert.deepEqual(reportLinks(null, platform), []);
+
+    // The run's own page comes first: it names the script and holds both reports.
+    const overview = '/api/reports/29.1790000000.abc-DEF_123/';
+    assert.deepEqual(reportLinks({ overview, playwright, allure: null }, platform), [
+      { label: 'Run report', href: platform + overview },
+      { label: 'Playwright report', href: platform + playwright },
+    ]);
+    for (const path of ['/api/reports/x', '/api/reports/x/../', '/api/reports/x/y/', '//evil.example/api/reports/x/']) {
+      assert.deepEqual(reportLinks({ overview: path }, platform), []);
+    }
+  });
+
+  it('sums up scripts that were run together', () => {
+    assert.equal(batchSummary([]), '');
+    assert.equal(batchSummary(null), '');
+    assert.equal(batchSummary([{ execution: { status: 'PASSED' } }]), '1 script: 1 passed');
+    assert.equal(
+      batchSummary([
+        { execution: { status: 'PASSED' } },
+        { execution: { status: 'RUNNING' } },
+        { execution: { status: 'PASSED' } },
+        { execution: null, error: 'This script is already running.' },
+        { execution: null, error: '' },
+        { execution: { status: 'FAILED' } },
+        { execution: { status: 'SOMETHING_NEW' } },
+      ]),
+      '7 scripts: 1 starting, 1 running, 2 passed, 1 failed, 1 unknown, 1 not started',
+    );
+  });
+
+  it('offers project changes to an ADMIN, and script editing to ADMIN and USER in an active project', () => {
+    assert.deepEqual(manageControls({ role: 'ADMIN', projectStatus: 'ACTIVE' }), { manageProjects: true, editScript: true });
+    assert.deepEqual(manageControls({ role: 'USER', projectStatus: 'ACTIVE' }), { manageProjects: false, editScript: true });
+    assert.deepEqual(manageControls({ role: 'VIEWER', projectStatus: 'ACTIVE' }), { manageProjects: false, editScript: false });
+    assert.deepEqual(manageControls({ role: 'USER', projectStatus: 'ARCHIVED' }), { manageProjects: false, editScript: false });
+    assert.deepEqual(manageControls({ role: undefined, projectStatus: undefined }), { manageProjects: false, editScript: false });
   });
 
   it('offers Run to ADMIN and USER in an active project once Jenkins is set up', () => {
