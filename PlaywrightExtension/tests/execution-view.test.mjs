@@ -8,6 +8,7 @@ import {
   isFinal,
   manageControls,
   reportLinks,
+  resultRows,
   runControls,
   runLinks,
   runReportLink,
@@ -282,5 +283,27 @@ describe('runs as rows: history and scripts run together', () => {
     for (const bad of ['/api/reports/52.1.x/', '/api/batch-reports/52.1.x/', '//evil.example/api/batch-reports/b1.1.x/', '', undefined]) {
       assert.equal(batchReportLink(bad, platform), null);
     }
+  });
+});
+
+describe('scripts run together as one run', () => {
+  const run = {
+    id: 59, scriptVersion: 1, status: 'PASSED', buildNumber: 59, total: 2, passed: 2, failed: 0, skipped: 0, durationMs: 27_000,
+    scripts: [{ id: 4, name: 'Login', version: 1 }, { id: 9, name: 'Cart', version: 3 }],
+  };
+
+  it('says how many scripts the run holds, instead of one version', () => {
+    assert.equal(runRow({ execution: run }, { withVersion: true }).detail, '#59 · 2 scripts together · build 59 · 2 tests: 2 passed, 0 failed · 27s');
+    // A run of one script still shows its version.
+    assert.equal(runRow({ execution: { ...run, scripts: [run.scripts[0]] } }, { withVersion: true, withId: false }).detail, 'v1 · build 59 · 2 tests: 2 passed, 0 failed · 27s');
+  });
+
+  it('names the script of each test only when asked', () => {
+    const items = [
+      { name: 'signs in', status: 'PASSED', durationMs: 10, scriptName: 'Login' },
+      { name: 'stray', status: 'PASSED', durationMs: 10, scriptName: null },
+    ];
+    assert.deepEqual(resultRows(items, '', true).map((row) => row.name), ['Login › signs in', 'stray']);
+    assert.deepEqual(resultRows(items, '').map((row) => row.name), ['signs in', 'stray']);
   });
 });

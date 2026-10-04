@@ -579,6 +579,14 @@
             <div class="btn-row" id="scripts-batch-bar" style="display:none">
               <label class="pick-all"><input type="checkbox" id="scripts-select-all"> Select all</label>
               <button class="btn btn-primary btn-sm" id="scripts-run-selected" disabled>▶ Run selected on Jenkins</button>
+              <button class="btn btn-secondary btn-sm" id="scripts-delete-selected" style="display:none" disabled>🗑 Delete selected</button>
+            </div>
+            <div class="manage-form" id="scripts-delete-confirm" style="display:none">
+              <div id="scripts-delete-text"></div>
+              <div class="btn-row">
+                <button class="btn btn-danger btn-sm" id="scripts-delete-yes">Delete</button>
+                <button class="btn btn-secondary btn-sm" id="scripts-delete-no">Cancel</button>
+              </div>
             </div>
             <div class="record-options" id="scripts-record" style="display:none">
               <span class="record-title">Record in the reports, for every test:</span>
@@ -588,7 +596,7 @@
             </div>
             <div class="manage-form" id="scripts-batch" style="display:none">
               <div class="batch-head">
-                <strong>▶ Scripts run together on Jenkins</strong>
+                <strong>▶ Ticked scripts — one Jenkins build</strong>
                 <button class="btn btn-icon" id="scripts-batch-close" title="Hide this list" aria-label="Hide this list">✕</button>
               </div>
               <div id="scripts-batch-summary" role="status"></div>

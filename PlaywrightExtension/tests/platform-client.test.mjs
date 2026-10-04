@@ -425,3 +425,34 @@ describe('platform client: one report for several runs', () => {
     assert.equal(calls.length, 1);
   });
 });
+
+describe('platform client: several scripts as one run', () => {
+  it('starts one run for the ticked scripts, with what to record', async () => {
+    const calls = [];
+    const client = createPlatformClient({
+      fetchFn: async (url, init) => {
+        calls.push({ url, init });
+        return json(201, { execution: { id: 59, status: 'QUEUED', scripts: [{ id: 4 }, { id: 9 }] } });
+      },
+      storage: {
+        getPlatform: async () => ({ url: 'http://localhost:3000', token: 'tok-1', user: USER }),
+        savePlatform: async () => undefined,
+      },
+    });
+
+    const run = await client.runScripts(7, [4, 9], { screenshots: true, video: true });
+    assert.equal(run.id, 59);
+    // One request, so one run and one Jenkins build.
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'http://localhost:3000/api/projects/7/run');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0].init.body), { scriptIds: [4, 9], screenshots: true, video: true });
+
+    await client.runScripts(7, [4]);
+    assert.deepEqual(JSON.parse(calls[1].init.body), { scriptIds: [4] });
+
+    for (const bad of [[], null, [0], [4, '9']]) await assert.rejects(() => client.runScripts(7, bad), /Choose a script/);
+    await assert.rejects(() => client.runScripts(0, [4]), /Choose a project/);
+    assert.equal(calls.length, 2);
+  });
+});

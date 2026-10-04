@@ -344,6 +344,19 @@ export function createPlatformClient({ fetchFn, storage }) {
       return data.execution;
     },
 
+    // Starts ONE run — one Jenkins build, one report — of several scripts of a project, and
+    // returns the run. `record` is as for runScript.
+    async runScripts(projectId, scriptIds, record = null) {
+      positiveId(projectId, 'Choose a project.');
+      if (!Array.isArray(scriptIds) || scriptIds.length === 0) throw new Error('Choose a script.');
+      for (const id of scriptIds) positiveId(id, 'Choose a script.');
+      const platform = await signedIn();
+      const body = { scriptIds };
+      if (record) Object.assign(body, { screenshots: Boolean(record.screenshots), video: Boolean(record.video) });
+      const { data } = await request(platform.url, `/projects/${projectId}/run`, { method: 'POST', token: platform.token, body });
+      return data.execution;
+    },
+
     // Reads a run. The server brings an unfinished run up to date with Jenkins first.
     async getExecution(executionId) {
       positiveId(executionId, 'Choose a run.');

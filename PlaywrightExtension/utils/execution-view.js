@@ -138,7 +138,10 @@ export function runRow(entry, { platformUrl = '', jenkinsBaseUrl = '', withVersi
   }
   const status = statusView(run.status);
   const parts = withId ? [`#${run.id}`] : [];
-  if (withVersion) parts.push(`v${run.scriptVersion}`);
+  // Scripts run together are one run: the row says how many, not one version.
+  const together = Array.isArray(run.scripts) ? run.scripts.length : 1;
+  if (together > 1) parts.push(`${together} scripts together`);
+  else if (withVersion) parts.push(`v${run.scriptVersion}`);
   if (run.buildNumber) parts.push(`build ${run.buildNumber}`);
   parts.push(countsText(run) || (isFinal(run.status) ? 'no test ran' : ''), durationText(run.durationMs), when);
   const links = [];
@@ -198,7 +201,8 @@ const ARTIFACTS = [
 // [{ label, className, name, duration, error, links: [{ label, href }] }].
 // Labels and classes come from the fixed tables above, never from the server's text, and a
 // link to a file of the build is offered only when it is a safe Jenkins link.
-export function resultRows(items, jenkinsBaseUrl = '') {
+// With `withScript`, a test's name starts with the script it belongs to: for scripts run together.
+export function resultRows(items, jenkinsBaseUrl = '', withScript = false) {
   if (!Array.isArray(items)) return [];
   return items.map((result) => {
     const known = typeof result?.status === 'string' && Object.hasOwn(RESULT, result.status) ? RESULT[result.status] : null;
@@ -210,7 +214,7 @@ export function resultRows(items, jenkinsBaseUrl = '') {
     return {
       label: known ? known.label : 'Unknown',
       className: `run-status run-${known ? known.tone : 'off'}`,
-      name: String(result?.name ?? ''),
+      name: (withScript && typeof result?.scriptName === 'string' ? `${result.scriptName} › ` : '') + String(result?.name ?? ''),
       duration: testDurationText(result?.durationMs),
       error: typeof result?.errorMessage === 'string' ? result.errorMessage : '',
       links,

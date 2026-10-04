@@ -8,8 +8,8 @@ import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
 import { PlatformClient } from './utils/platform-client.js';
 import {
-  batchReportLink, batchSummary, countsText, deleteControls, durationText, isFinal, manageControls, reportLinks,
-  resultRows, runControls, runLinks, runRow, statusView,
+  countsText, deleteControls, durationText, isFinal, manageControls, reportLinks, resultRows, runControls, runLinks,
+  runRow, statusView,
 } from './utils/execution-view.js';
 import { extractCode, looksLikeCode, pickFixedCode, sectionAfter, toSingleFile } from './utils/code-extract.js';
 import { diffStats, lineDiff } from './utils/line-diff.js';
@@ -1281,6 +1281,9 @@ function setupProjectsPanel() {
   const batchPanel = $('scripts-batch');
   const batchSummaryEl = $('scripts-batch-summary');
   const batchList = $('scripts-batch-list');
+  const deleteSelected = $('scripts-delete-selected');
+  const deleteSelectedConfirm = $('scripts-delete-confirm');
+  const deleteSelectedText = $('scripts-delete-text');
   const batchLinks = $('scripts-batch-links');
   const batchClose = $('scripts-batch-close');
   const recordInScript = $('script-record');
@@ -1292,7 +1295,7 @@ function setupProjectsPanel() {
     newProjectBtn, newProjectForm, newProjectName, renameBtn, renameForm, renameName, projectDeleteBtn,
     projectDeleteConfirm, projectDeleteText, editBtn, editForm, editName, editContent, editSummary,
     batchBar, selectAll, runSelected, batchPanel, batchSummaryEl, batchList, recordInScript, recordInList,
-    batchLinks, batchClose,
+    batchLinks, batchClose, deleteSelected, deleteSelectedConfirm, deleteSelectedText,
   ];
   if (required.some((el) => !el)) return;
 
@@ -1401,10 +1404,19 @@ function setupProjectsPanel() {
     }).showRun;
   }
 
+  // Whether the open project's scripts may be changed or deleted by this person.
+  function canEditHere() {
+    return manageControls({ role: state.user?.role, projectStatus: state.project?.status }).editScript;
+  }
+
   function renderBatchBar() {
     const total = state.listed.length;
     const chosen = state.selected.size;
-    show(batchBar, canRunHere() && total > 0);
+    show(batchBar, (canRunHere() || canEditHere()) && total > 0);
+    show(runSelected, canRunHere());
+    show(deleteSelected, canEditHere());
+    deleteSelected.disabled = chosen === 0;
+    if (chosen === 0) show(deleteSelectedConfirm, false);
     show(recordInList, canRunHere() && total > 0);
     selectAll.checked = total > 0 && chosen === total;
     selectAll.indeterminate = chosen > 0 && chosen < total;
@@ -1454,21 +1466,10 @@ function setupProjectsPanel() {
   // each with its status and its own report.
   function renderBatch() {
     show(batchPanel, state.batch.length > 0);
-    const done = state.batch.filter((entry) => entry.error || (entry.execution && isFinal(entry.execution.status))).length;
-    const progress = state.batch.length > 0 && done < state.batch.length ? ` — ${done} of ${state.batch.length} finished` : '';
-    batchSummaryEl.textContent = batchSummary(state.batch) + progress;
-    const href = batchReportLink(state.batchReportPath, state.platformUrl);
-    if (href) {
-      const link = document.createElement('a');
-      link.className = 'btn btn-primary btn-sm';
-      link.textContent = '📊 Report for all of them';
-      link.href = href;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      batchLinks.replaceChildren(link);
-    } else {
-      batchLinks.replaceChildren();
-    }
+    // The ticked scripts are one run: its row has the one status and the one report; this
+    // line names the scripts in it.
+    batchSummaryEl.textContent = state.batch.length > 0 ? state.batch[0].names.join(' · ') : '';
+    batchLinks.replaceChildren();
     batchList.replaceChildren(...state.batch.map((entry) => runRowEl(entry.name, entry, {}, () => openScript(entry.id))));
   }
 
@@ -1493,6 +1494,39 @@ function setupProjectsPanel() {
     }, POLL_MS);
   }
 
+  // Deleting the ticked scripts: asked once more in the panel, then one after another, so a
+  // script that cannot be deleted (it is running) does not keep the others.
+  deleteSelected.addEventListener('click', () => {
+    const chosen = state.listed.filter((script) => state.selected.has(script.id));
+    if (chosen.length === 0) return;
+    deleteSelectedText.textContent =
+      chosen.length === 1
+        ? `Delete "${chosen[0].name}" from the platform, and its builds from Jenkins?`
+        : `Delete these ${chosen.length} scripts from the platform, and their builds from Jenkins? ${chosen.map((script) => script.name).join(', ')}`;
+    show(deleteSelectedConfirm, true);
+  });
+  $('scripts-delete-no')?.addEventListener('click', () => show(deleteSelectedConfirm, false));
+  $('scripts-delete-yes')?.addEventListener('click', async (event) => {
+    const chosen = state.listed.filter((script) => state.selected.has(script.id));
+    const turn = state.turn;
+    const button = event.currentTarget;
+    button.disabled = true;
+    const kept = [];
+    for (const script of chosen) {
+      try {
+        await PlatformClient.deleteScript(script.id);
+      } catch (err) {
+        kept.push(`${script.name}: ${err.status === 401 ? EXPIRED : err.message}`);
+      }
+    }
+    button.disabled = false;
+    if (turn !== state.turn) return;
+    show(deleteSelectedConfirm, false);
+    showToast(`Deleted ${chosen.length - kept.length} of ${chosen.length}`);
+    await loadScripts();
+    if (kept.length > 0) say(`❌ Not deleted — ${kept.join(' · ')}`);
+  });
+
   batchClose.addEventListener('click', () => {
     clearTimeout(state.batchTimer);
     state.batch = [];
@@ -1512,34 +1546,26 @@ function setupProjectsPanel() {
     const turn = state.turn;
     clearTimeout(state.batchTimer);
     state.batchProjectId = state.project.id;
-    state.batch = chosen.map((script) => ({ id: script.id, name: script.name, execution: null, error: '' }));
-    state.batchReportPath = '';
+    // The ticked scripts are one run: one Jenkins build, one report. The row opens the first of them.
+    const entry = {
+      id: chosen[0].id,
+      name: chosen.length === 1 ? chosen[0].name : `${chosen.length} scripts in one Jenkins build`,
+      names: chosen.map((script) => script.name),
+      execution: null,
+      error: '',
+    };
+    state.batch = [entry];
     state.batchStarting = true;
     renderBatchBar();
     renderBatch();
-    // One at a time: Jenkins queues the builds, and a refusal for one script does not stop the rest.
-    for (const entry of state.batch) {
-      try {
-        entry.execution = await PlatformClient.runScript(entry.id, state.record);
-      } catch (err) {
-        entry.error = err.status === 401 ? EXPIRED : err.message;
-      }
-      if (turn !== state.turn) break;
-      renderBatch();
+    try {
+      entry.execution = await PlatformClient.runScripts(state.project.id, chosen.map((script) => script.id), state.record);
+    } catch (err) {
+      entry.error = err.status === 401 ? EXPIRED : err.message;
     }
     state.batchStarting = false;
     if (turn !== state.turn) return;
-    // One page for all the runs that started. Without it each row still has its own report.
-    const started = state.batch.filter((entry) => entry.execution).map((entry) => entry.execution.id);
-    if (started.length > 0) {
-      try {
-        state.batchReportPath = await PlatformClient.getBatchReportPath(started);
-      } catch {
-        state.batchReportPath = '';
-      }
-      if (turn !== state.turn) return;
-      renderBatch();
-    }
+    renderBatch();
     state.selected = new Set();
     for (const box of scriptList.querySelectorAll('input[type="checkbox"]')) box.checked = false;
     renderBatchBar();
@@ -1635,7 +1661,9 @@ function setupProjectsPanel() {
     const turn = state.turn;
     let rows;
     try {
-      rows = resultRows(await PlatformClient.listExecutionResults(execution.id), state.jenkins?.baseUrl || '');
+      // In a run of several scripts each test is shown with the script it belongs to.
+      const together = (execution.scripts?.length || 1) > 1;
+      rows = resultRows(await PlatformClient.listExecutionResults(execution.id), state.jenkins?.baseUrl || '', together);
     } catch {
       // The card still shows the counts; the list is tried again the next time the run is drawn.
       if (state.resultsFor === execution.id) state.resultsFor = null;
@@ -1727,7 +1755,9 @@ function setupProjectsPanel() {
       runStatus.className = status.className;
       runStatus.textContent = status.label;
       const build = execution.buildNumber ? ` · build ${execution.buildNumber}` : '';
-      runTitle.textContent = `Run #${execution.id} · v${execution.scriptVersion}${build}`;
+      const together = execution.scripts?.length || 1;
+      const what = together > 1 ? `${together} scripts together` : `v${execution.scriptVersion}`;
+      runTitle.textContent = `Run #${execution.id} · ${what}${build}`;
       runCounts.textContent = countsText(execution);
       const duration = durationText(execution.durationMs);
       runTimes.textContent = [
@@ -1868,7 +1898,7 @@ function setupProjectsPanel() {
       state.listed = scripts;
       // A tick is kept only for a script that is still in the list.
       state.selected = new Set(scripts.filter((script) => state.selected.has(script.id)).map((script) => script.id));
-      const pick = canRunHere();
+      const pick = canRunHere() || canEditHere();
       scriptList.replaceChildren(...scripts.map((script) => {
         const open = item(script.name, scriptDetail(script), () => openScript(script.id));
         if (!pick) return open;
