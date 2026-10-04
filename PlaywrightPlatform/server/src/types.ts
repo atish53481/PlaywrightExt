@@ -133,13 +133,25 @@ export type ExecutionStatus = 'QUEUED' | 'RUNNING' | 'PASSED' | 'FAILED' | 'ABOR
 /** The table allows more stages; this release writes these three. */
 export type ExecutionStage = 'QUEUED' | 'RUNNING' | 'COMPLETED';
 
-/** One run of one script version on Jenkins. */
+/** A script version that is part of a run. */
+export interface ExecutionScript {
+  id: number;
+  name: string;
+  version: number;
+}
+
+/**
+ * One run on Jenkins: one build, of one script version or of several scripts run together.
+ * `scriptId`, `scriptName`, and `scriptVersion` are those of the first script; `scripts`
+ * lists them all.
+ */
 export interface Execution {
   id: number;
   projectId: number;
   scriptId: number;
   scriptName: string;
   scriptVersion: number;
+  scripts: ExecutionScript[];
   status: ExecutionStatus;
   stage: ExecutionStage;
   /** The Jenkins queue item; null until Jenkins accepted the run. */

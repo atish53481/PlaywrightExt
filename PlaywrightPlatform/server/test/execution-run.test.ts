@@ -53,7 +53,9 @@ describe('executions: start and read a run', () => {
     expect(stub.lastParams.PLAYWRIGHT_IMAGE).toBe(world.ctx.config.playwrightDockerImage);
     // What the reports call the run, and what the test file is named in the build.
     expect(stub.lastParams.RUN_LABEL).toBe('Run #1 - Login Test - v1');
-    expect(stub.lastParams.SPEC_NAME).toBe('login-test');
+    // The file name no longer travels as a parameter: the build downloads the files by name.
+    expect(stub.lastParams.SPEC_NAME).toBeUndefined();
+    expect(res.json().execution.scripts).toEqual([{ id: world.scriptId, name: 'Login Test', version: 1 }]);
     // Started without a choice: a screenshot of every test, and video for failed tests only.
     expect(stub.lastParams).toMatchObject({ SCREENSHOTS: 'on', VIDEO: 'off' });
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);

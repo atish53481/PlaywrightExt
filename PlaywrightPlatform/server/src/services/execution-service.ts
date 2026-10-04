@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { AppError, notFound } from '../errors';
 import { JenkinsError, type BuildState } from '../jenkins/jenkins-client';
-import { runLabel, specName } from '../jenkins/pipeline';
+import { runLabel, specFiles } from '../jenkins/pipeline';
 import { jenkinsReportUrl } from '../jenkins/urls';
 import type { Transact } from '../repositories';
 import type { AuditRepository } from '../repositories/audit-repository';
@@ -60,6 +60,8 @@ export interface RunReport {
     screenshot?: string;
     video?: string;
     trace?: string;
+    /** The test file the test is in, as the build named it. */
+    file?: string;
   }>;
 }
 
@@ -190,46 +192,68 @@ export class ExecutionService {
    * history as ERROR and the caller gets the reason.
    */
   async run(actor: Actor, scriptId: number, record: RunRecording = DEFAULT_RECORDING): Promise<Execution> {
-    const script = await this.scripts.findLive(scriptId);
-    if (!script) throw notFound('Script');
-    if (script.projectStatus !== 'ACTIVE') throw projectNotActive();
+    return this.start(actor, [scriptId], record);
+  }
+
+  /**
+   * Starts one run — one Jenkins build — of several scripts of a project. The scripts run
+   * together and share one report. A script that is not in the project is refused as unknown.
+   */
+  async runMany(actor: Actor, projectId: number, scriptIds: number[], record: RunRecording = DEFAULT_RECORDING): Promise<Execution> {
+    return this.start(actor, scriptIds, record, projectId);
+  }
+
+  private async start(actor: Actor, scriptIds: number[], record: RunRecording, projectId?: number): Promise<Execution> {
+    // Always in the same order, so two people who start overlapping sets cannot lock each other out.
+    const ids = [...new Set(scriptIds)].sort((a, b) => a - b);
+    for (const id of ids) {
+      const script = await this.scripts.findLive(id);
+      if (!script || (projectId !== undefined && script.projectId !== projectId)) throw notFound('Script');
+      if (script.projectStatus !== 'ACTIVE') throw projectNotActive();
+    }
     const link = await this.jenkins.link();
     // A run nobody watched still reads as unfinished. Bring it up to date before refusing a new one.
-    const stale = await this.executions.findActive(scriptId);
-    if (stale) await this.sync(stale, link);
+    for (const id of ids) {
+      const stale = await this.executions.findActive(id);
+      if (stale) await this.sync(stale, link);
+    }
 
     // The build proves who it is with this token. Only its hash is stored.
     const token = newToken();
     const created = await this.transact(async (r) => {
-      // The lock makes two people who press Run together take turns: the second sees the first one's run.
-      if (!(await r.scripts.lock(scriptId))) throw notFound('Script');
-      const current = await r.scripts.findLive(scriptId);
-      if (!current) throw notFound('Script'); // its project is deleted
-      if (current.projectStatus !== 'ACTIVE') throw projectNotActive();
-      const unfinished = await r.executions.findActive(scriptId);
-      if (unfinished) throw runInProgress(unfinished.id);
+      const scripts: Array<{ id: number; name: string; version: number; projectId: number }> = [];
+      for (const id of ids) {
+        // The lock makes two people who press Run together take turns: the second sees the first one's run.
+        if (!(await r.scripts.lock(id))) throw notFound('Script');
+        const current = await r.scripts.findLive(id);
+        if (!current) throw notFound('Script'); // its project is deleted
+        if (current.projectStatus !== 'ACTIVE') throw projectNotActive();
+        if (scripts.length > 0 && current.projectId !== scripts[0].projectId) throw notFound('Script');
+        const unfinished = await r.executions.findActive(id);
+        if (unfinished) throw runInProgress(unfinished.id);
+        scripts.push({ id, name: current.name, version: current.version, projectId: current.projectId });
+      }
+      const first = scripts[0];
 
-      const jobId = await r.jenkins.ensureProjectJob(current.projectId, link.configurationId, link.jobName);
+      const jobId = await r.jenkins.ensureProjectJob(first.projectId, link.configurationId, link.jobName);
       const id = await r.executions.insert({
-        projectId: current.projectId,
-        scriptId,
-        scriptVersion: current.version,
+        projectId: first.projectId,
+        scriptId: first.id,
+        scriptVersion: first.version,
         jenkinsJobId: jobId,
         triggeredBy: actor.userId,
         callbackTokenHash: hashToken(token),
         createdAt: this.nowDate(),
       });
-      await r.skills.snapshotForExecution(id, scriptId, current.version);
-      await this.record(
-        actor,
-        'execution.run',
-        id,
-        { projectId: current.projectId, scriptId, scriptVersion: current.version },
-        r.audit,
-      );
-      return { id, version: current.version, name: current.name };
+      await r.executions.addScripts(id, scripts);
+      for (const script of scripts) await r.skills.snapshotForExecution(id, script.id, script.version);
+      const details: Record<string, unknown> = { projectId: first.projectId, scriptId: first.id, scriptVersion: first.version };
+      if (scripts.length > 1) details.scripts = scripts.map((script) => ({ id: script.id, version: script.version }));
+      await this.record(actor, 'execution.run', id, details, r.audit);
+      return { id, scripts };
     });
 
+    const [first] = created.scripts;
     try {
       const queueId = await link.client.trigger(link.jobName, {
         EXECUTION_ID: String(created.id),
@@ -237,8 +261,10 @@ export class ExecutionService {
         RUN_TOKEN: token,
         PLAYWRIGHT_IMAGE: this.options.playwrightImage,
         // So the reports say which script, version, and run they show.
-        RUN_LABEL: runLabel(created.id, created.name, created.version),
-        SPEC_NAME: specName(created.name),
+        RUN_LABEL:
+          created.scripts.length === 1
+            ? runLabel(created.id, first.name, first.version)
+            : `Run #${created.id} - ${created.scripts.length} scripts`,
         SCREENSHOTS: record.screenshots ? 'on' : 'off',
         VIDEO: record.video ? 'on' : 'off',
       });
@@ -256,7 +282,8 @@ export class ExecutionService {
       this.log.warn(`[EXECUTION] Run ${created.id} could not start: ${err.message}`);
       throw failure;
     }
-    this.log.info(`[EXECUTION] Started run ${created.id} of script ${scriptId} v${created.version}`);
+    const started = created.scripts.map((script) => `script ${script.id} v${script.version}`).join(', ');
+    this.log.info(`[EXECUTION] Started run ${created.id} of ${started}`);
     return this.find(created.id);
   }
 
@@ -332,20 +359,44 @@ export class ExecutionService {
    */
   async scriptFor(id: number, token: string, buildNumber: number | null): Promise<string> {
     const execution = await this.authorize(id, token);
-    if (buildNumber !== null && execution.buildNumber === null) {
-      await this.executions.updateActive(id, {
-        buildNumber,
-        reportUrl: jenkinsReportUrl(execution.jenkinsBaseUrl, execution.jobName, buildNumber),
-      });
-    }
+    await this.noteBuild(execution, buildNumber);
     const version = await this.scripts.findVersion(execution.scriptId, execution.scriptVersion);
     if (!version) throw notFound('Script version');
     return version.content;
   }
 
+  /**
+   * Every script of a run as a test file for the build: its name in the build and its text,
+   * each at the version recorded when Run was pressed. One request, so one build runs them all.
+   */
+  async scriptsFor(id: number, token: string, buildNumber: number | null): Promise<Array<{ name: string; content: string }>> {
+    const execution = await this.authorize(id, token);
+    await this.noteBuild(execution, buildNumber);
+    const names = specFiles(execution.scripts);
+    const files: Array<{ name: string; content: string }> = [];
+    for (const [index, script] of execution.scripts.entries()) {
+      const version = await this.scripts.findVersion(script.id, script.version);
+      if (!version) throw notFound('Script version');
+      files.push({ name: names[index].file, content: version.content });
+    }
+    return files;
+  }
+
+  /** Records the number the build reports for itself, once. */
+  private async noteBuild(execution: Execution, buildNumber: number | null): Promise<void> {
+    if (buildNumber === null || execution.buildNumber !== null) return;
+    await this.executions.updateActive(execution.id, {
+      buildNumber,
+      reportUrl: jenkinsReportUrl(execution.jenkinsBaseUrl, execution.jobName, buildNumber),
+    });
+  }
+
   /** Stores what the build reports. Status is never taken from here: it comes only from Jenkins. */
   async report(id: number, token: string, report: RunReport): Promise<void> {
     const execution = await this.authorize(id, token);
+    // A test belongs to the script whose file it is in; in a run of one script, to that script.
+    const byFile = new Map(specFiles(execution.scripts).map((entry) => [entry.file, entry.id]));
+    const only = execution.scripts.length === 1 ? execution.scripts[0].id : null;
     const stored = await this.transact(async (r) => {
       const updated = await r.executions.updateActive(id, {
         total: report.total,
@@ -357,8 +408,8 @@ export class ExecutionService {
       if (updated && report.tests) {
         await r.executions.replaceResults(
           id,
-          execution.scriptId,
           report.tests.map((test) => ({
+            scriptId: (test.file ? byFile.get(test.file) : undefined) ?? only,
             name: test.name,
             status: test.status,
             durationMs: test.durationMs,
@@ -621,7 +672,16 @@ export class ExecutionService {
       }
       await r.executions.updateActive(execution.id, patch);
       if (outcome.status === 'PASSED' || outcome.status === 'FAILED') {
-        await r.scripts.markRunResult(execution.scriptId, execution.scriptVersion, outcome.status);
+        if (execution.scripts.length === 1) {
+          await r.scripts.markRunResult(execution.scriptId, execution.scriptVersion, outcome.status);
+        } else {
+          // Scripts run together are each judged by their own tests, not by the build as a whole.
+          const each = await r.executions.scriptOutcomes(execution.id);
+          for (const script of execution.scripts) {
+            const state = each.get(script.id);
+            if (state) await r.scripts.markRunResult(script.id, script.version, state);
+          }
+        }
       }
       return outcome.status;
     });

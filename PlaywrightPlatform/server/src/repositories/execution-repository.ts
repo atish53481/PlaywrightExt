@@ -59,6 +59,8 @@ function toExecution(row: ExecutionRow): Execution {
     scriptId: row.script_id,
     scriptName: row.script_name,
     scriptVersion: row.script_version,
+    // A run of one script; `withScripts` replaces this for a run that recorded its scripts.
+    scripts: [{ id: row.script_id, name: row.script_name, version: row.script_version }],
     status: row.status,
     stage: row.stage,
     queueId: row.jenkins_queue_id,
@@ -89,6 +91,9 @@ export interface TestResult {
   screenshotPath: string | null;
   videoPath: string | null;
   tracePath: string | null;
+  /** The script the test belongs to. Null when the build did not say which file the test is in. */
+  scriptId: number | null;
+  scriptName: string | null;
 }
 
 export interface NewExecution {
@@ -173,30 +178,61 @@ export class ExecutionRepository {
     return row.id;
   }
 
+  /** Records the script versions a run consists of. */
+  async addScripts(executionId: number, scripts: Array<{ id: number; version: number }>): Promise<void> {
+    await this.db('execution_scripts').insert(
+      scripts.map((script) => ({ execution_id: executionId, script_id: script.id, script_version: script.version })),
+    );
+  }
+
+  /** Runs with the scripts each one consists of, in the order of the scripts' ids. */
+  private async withScripts(rows: ExecutionRow[]): Promise<Execution[]> {
+    const executions = rows.map(toExecution);
+    if (executions.length === 0) return executions;
+    const parts: Array<{ execution_id: number; id: number; name: string; version: number }> = await this.db('execution_scripts as x')
+      .join('test_scripts as s', 's.id', 'x.script_id')
+      .whereIn('x.execution_id', executions.map((execution) => execution.id))
+      .select('x.execution_id', 's.id', 's.name', 'x.script_version as version')
+      .orderBy('s.id');
+    for (const execution of executions) {
+      const own = parts.filter((part) => part.execution_id === execution.id);
+      // A run made before scripts were recorded keeps the one script of its own row.
+      if (own.length > 0) execution.scripts = own.map((part) => ({ id: part.id, name: part.name, version: part.version }));
+    }
+    return executions;
+  }
+
+  /** Narrows a query to the runs a script is part of: alone, or together with others. */
+  private ofScript(query: Knex.QueryBuilder, scriptId: number): Knex.QueryBuilder {
+    return query.where((q) =>
+      q.where('e.script_id', scriptId).orWhereExists((sub) =>
+        sub.select(this.db.raw('1')).from('execution_scripts as x').whereRaw('x.execution_id = e.id').where('x.script_id', scriptId),
+      ),
+    );
+  }
+
   async find(id: number): Promise<Execution | null> {
     const row: ExecutionRow | undefined = await this.executions().where('e.id', id).select(...COLUMNS).first();
-    return row ? toExecution(row) : null;
+    return row ? (await this.withScripts([row]))[0] : null;
   }
 
   /** The script's unfinished run, if it has one. */
   async findActive(scriptId: number): Promise<Execution | null> {
-    const row: ExecutionRow | undefined = await this.executions()
-      .where('e.script_id', scriptId)
+    const row: ExecutionRow | undefined = await this.ofScript(this.executions(), scriptId)
       .whereIn('e.status', UNFINISHED)
       .select(...COLUMNS)
       .orderBy('e.id', 'desc')
       .first();
-    return row ? toExecution(row) : null;
+    return row ? (await this.withScripts([row]))[0] : null;
   }
 
   /** Newest first. */
   async listForScript(scriptId: number, limit: number): Promise<Execution[]> {
-    const rows: ExecutionRow[] = await this.executions()
-      .where('e.script_id', scriptId)
+    const rows: ExecutionRow[] = await this.ofScript(this.executions(), scriptId)
       .select(...COLUMNS)
       .orderBy('e.id', 'desc')
       .limit(limit);
-    return rows.map(toExecution);
+    return this.withScripts(rows);
   }
 
   /**
@@ -226,14 +262,14 @@ export class ExecutionRepository {
     return row ? { total: row.total_tests, errorMessage: row.error_message } : null;
   }
 
-  /** Stores the per-test results of a run in place of any it had. */
-  async replaceResults(executionId: number, scriptId: number, results: TestResult[]): Promise<void> {
+  /** Stores the per-test results of a run in place of any it had. Each result names its script, or none. */
+  async replaceResults(executionId: number, results: Array<Omit<TestResult, 'scriptName'>>): Promise<void> {
     await this.db('execution_results').where({ execution_id: executionId }).delete();
     if (results.length === 0) return;
     await this.db('execution_results').insert(
       results.map((result) => ({
         execution_id: executionId,
-        script_id: scriptId,
+        script_id: result.scriptId,
         test_name: result.name,
         status: result.status,
         duration: result.durationMs,
@@ -247,10 +283,11 @@ export class ExecutionRepository {
 
   /** In the order the build reported them. */
   async listResults(executionId: number): Promise<TestResult[]> {
-    const rows = await this.db('execution_results')
-      .where({ execution_id: executionId })
-      .orderBy('id')
-      .select('test_name', 'status', 'duration', 'error_message', 'screenshot_path', 'video_path', 'trace_path');
+    const rows = await this.db('execution_results as r')
+      .leftJoin('test_scripts as s', 's.id', 'r.script_id')
+      .where('r.execution_id', executionId)
+      .orderBy('r.id')
+      .select('r.test_name', 'r.status', 'r.duration', 'r.error_message', 'r.screenshot_path', 'r.video_path', 'r.trace_path', 'r.script_id', 's.name as script_name');
     return rows.map((row) => ({
       name: row.test_name,
       status: row.status,
@@ -259,13 +296,34 @@ export class ExecutionRepository {
       screenshotPath: row.screenshot_path,
       videoPath: row.video_path,
       tracePath: row.trace_path,
+      scriptId: row.script_id === null ? null : Number(row.script_id),
+      scriptName: row.script_name ?? null,
     }));
   }
 
-  /** The Jenkins builds a script's runs produced. */
+  /**
+   * How each script of a run ended, judged by its own tests: FAILED when any of them failed,
+   * PASSED when it has tests and none failed. A script with no result is not in the answer.
+   */
+  async scriptOutcomes(executionId: number): Promise<Map<number, 'PASSED' | 'FAILED'>> {
+    const rows: Array<{ script_id: number; failed: string | number }> = await this.db('execution_results')
+      .where({ execution_id: executionId })
+      .whereNotNull('script_id')
+      .groupBy('script_id')
+      .select('script_id', this.db.raw("count(*) filter (where status = 'FAILED') as failed"));
+    return new Map(rows.map((row) => [Number(row.script_id), Number(row.failed) > 0 ? 'FAILED' : 'PASSED']));
+  }
+
+  /**
+   * The Jenkins builds a script's own runs produced. A build that ran this script together
+   * with others is left out: it also holds the reports of those other scripts.
+   */
   async buildsForScript(scriptId: number): Promise<Array<{ jobName: string; buildNumber: number }>> {
     const rows: ExecutionRow[] = await this.executions()
       .where('e.script_id', scriptId)
+      .whereNotExists((sub) =>
+        sub.select(this.db.raw('1')).from('execution_scripts as x').whereRaw('x.execution_id = e.id').whereNot('x.script_id', scriptId),
+      )
       .whereNotNull('e.jenkins_build_number')
       .select(...COLUMNS)
       .orderBy('e.id');

@@ -239,9 +239,15 @@ For a script that is already stored:
      tabs. Both reports are titled "Run #38 - <script name> - v2", and the test file in them
      is named after the script. The page opens from the platform, with no Jenkins sign-in.
    - To run several scripts, tick them in the project's script list (or **Select all**) and
-     press **Run selected on Jenkins**. Each script becomes its own run. The list above the
-     scripts shows each one's status with its **Run report** and **Jenkins** links, and
-     **Report for all of them** opens one page for the whole batch.
+     press **Run selected on Jenkins**. The ticked scripts are **one run: one Jenkins build
+     and one report**. The build downloads all of them and runs them together; the Playwright
+     and Allure reports show each script as its own test file, and the run report page says
+     which script each test belongs to. The run appears in the history of every script in
+     it, each script is marked passed or failed by its own tests, and none of them can be
+     started again until the run ends.
+   - **Delete selected** removes the ticked scripts, after asking once more. A build that
+     ran several scripts together is kept when one of them is deleted, because it also holds
+     the reports of the others.
    - Before a run, tick **Screenshots** and **Video** to have them recorded for every test
      and shown in both reports. A failed test keeps both whatever is ticked.
    - **Run history on Jenkins** in a script lists its last 10 runs, each with its status,

@@ -329,7 +329,8 @@ export class SkillRepository {
       `insert into execution_skill_snapshots (execution_id, skill_id, skill_version, skill_name)
        select ?, ss.skill_id, ss.skill_version, s.name
        from script_skills ss join skills s on s.id = ss.skill_id
-       where ss.script_id = ? and ss.script_version = ?`,
+       where ss.script_id = ? and ss.script_version = ?
+       on conflict do nothing`,
       [executionId, scriptId, scriptVersion],
     );
   }

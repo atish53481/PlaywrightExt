@@ -49,6 +49,21 @@ export function specName(scriptName: string): string {
   return slug || 'script';
 }
 
+/**
+ * The test file each script of a run gets in the build: the script's name as a slug, made
+ * unique within the run, with ".spec.ts". The order is the order of `scripts`.
+ */
+export function specFiles(scripts: Array<{ id: number; name: string }>): Array<{ id: number; file: string }> {
+  const used = new Set<string>();
+  return scripts.map((script) => {
+    const base = specName(script.name);
+    let name = base;
+    for (let n = 2; used.has(name); n += 1) name = `${base.slice(0, 56)}-${n}`;
+    used.add(name);
+    return { id: script.id, file: `${name}.spec.ts` };
+  });
+}
+
 // Both reports carry the run's label (see runLabel), read from run-label.txt, so a person
 // reading one knows which stored script, which version, and which run it shows.
 const PLAYWRIGHT_CONFIG = `import fs from 'node:fs';
@@ -135,6 +150,8 @@ function collectTests(suites, path, out) {
           durationMs: Math.max(0, Math.round(results.reduce((sum, r) => sum + (r.duration || 0), 0))),
         };
         if (status === 'FAILED' && last.error && last.error.message) entry.errorMessage = plain(last.error.message);
+        // The file the test is in: the platform knows which script each file is.
+        if (spec.file) entry.file = String(spec.file).split('/').pop();
         // The files Playwright kept for the test, as paths inside this workspace.
         for (const kind of ['screenshot', 'video', 'trace']) {
           const file = (last.attachments || []).find((a) => a.name === kind && a.path);
@@ -171,6 +188,23 @@ try {
 } catch (err) {
   console.log('Could not write the result: ' + err.message);
 }
+`;
+
+// Runs in the container before the tests. The agent downloaded every script of the run as
+// one JSON file; this writes each one into tests/. Only a plain file name is accepted, so a
+// name can never point outside tests/.
+const UNPACK_SCRIPT = `const fs = require('node:fs');
+
+const files = JSON.parse(fs.readFileSync('scripts.json', 'utf8')).files || [];
+fs.mkdirSync('tests', { recursive: true });
+let written = 0;
+for (const file of files) {
+  if (typeof file.name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}\\.spec\\.ts$/.test(file.name)) continue;
+  fs.writeFileSync('tests/' + file.name, String(file.content));
+  written += 1;
+}
+console.log('Unpacked ' + written + ' test file(s)');
+if (written === 0) process.exit(1);
 `;
 
 /** Groovy string literal with single quotes; backslashes and quotes are escaped. */
@@ -236,21 +270,18 @@ pipeline {
         writeFile file: 'playwright.config.ts', text: ${groovy(PLAYWRIGHT_CONFIG)}
         writeFile file: 'report-result.cjs', text: ${groovy(REPORT_SCRIPT)}
         writeFile file: 'allurerc.mjs', text: ${groovy(ALLURE_CONFIG)}
+        writeFile file: 'unpack-scripts.cjs', text: ${groovy(UNPACK_SCRIPT)}
         script {
           // What the reports call this run. Written as a file: it never meets a shell.
           writeFile file: 'run-label.txt', text: (params.RUN_LABEL ?: '')
           // Whether every test gets a screenshot and a video. Only "on" switches one on, so the file holds two booleans and nothing else.
           writeFile file: 'run-options.json', text: '{"screenshots":' + (params.SCREENSHOTS == 'on') + ',"video":' + (params.VIDEO == 'on') + '}'
-          // The test file is named after the script, so the reports show that name. The name
-          // becomes part of a command line, so anything but a plain slug falls back to "script".
-          def spec = (params.SPEC_NAME ?: '') ==~ /[a-z0-9][a-z0-9-]{0,60}/ ? params.SPEC_NAME : 'script'
-          // The agent downloads the script. "set +x" and "@" keep the shell from printing the line, and the token with it.
+          // The agent downloads every script of the run as one file; the container unpacks it into tests/.
+          // "set +x" and "@" keep the shell from printing the line, and the token with it.
           if (isUnix()) {
-            sh 'mkdir -p tests'
-            sh 'set +x; curl -sS -f -H "Authorization: Bearer $RUN_TOKEN" -H "X-Build-Number: $BUILD_NUMBER" -o tests/' + spec + '.spec.ts "$PLATFORM_URL/api/executions/$EXECUTION_ID/script"'
+            sh 'set +x; curl -sS -f -H "Authorization: Bearer $RUN_TOKEN" -H "X-Build-Number: $BUILD_NUMBER" -o scripts.json "$PLATFORM_URL/api/executions/$EXECUTION_ID/scripts"'
           } else {
-            bat 'if not exist tests mkdir tests'
-            bat '@curl -sS -f -H "Authorization: Bearer %RUN_TOKEN%" -H "X-Build-Number: %BUILD_NUMBER%" -o tests\\\\' + spec + '.spec.ts "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/script"'
+            bat '@curl -sS -f -H "Authorization: Bearer %RUN_TOKEN%" -H "X-Build-Number: %BUILD_NUMBER%" -o scripts.json "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/scripts"'
           }
         }
       }
@@ -258,7 +289,7 @@ pipeline {
     stage('Install') {
       steps {
         script {
-          if (inImage('npm install --no-audit --no-fund') != 0) { error('npm install failed inside the Playwright image.') }
+          if (inImage('node unpack-scripts.cjs && npm install --no-audit --no-fund') != 0) { error('npm install failed inside the Playwright image, or the scripts could not be unpacked.') }
         }
       }
     }
@@ -325,11 +356,6 @@ export function jobConfigXml(image: string): string {
         <hudson.model.StringParameterDefinition>
           <name>RUN_LABEL</name>
           <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>SPEC_NAME</name>
-          <defaultValue>script</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>

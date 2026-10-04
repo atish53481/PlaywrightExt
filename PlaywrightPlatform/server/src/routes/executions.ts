@@ -15,6 +15,7 @@ import {
   reportFileParams,
   reportLinksResponse,
   reportOverviewParams,
+  runManyBody,
   runScriptBody,
   resultParams,
   runReportBody,
@@ -53,6 +54,14 @@ export async function executionRoutes(app: FastifyInstance, deps: ExecutionRoute
     // The body is optional: a run started without one records a screenshot of every test and no video.
     const record = parse(runScriptBody, req.body ?? {});
     const execution = await deps.executions.run(actorOf(req), id, record);
+    return reply.status(201).send(shape(executionResponse, { execution: dto(execution) }));
+  });
+
+  // Several scripts of a project as one run: one Jenkins build, one report.
+  app.post('/projects/:id/run', { preHandler: writers }, async (req, reply) => {
+    const { id } = parse(idParams, req.params);
+    const { scriptIds, ...record } = parse(runManyBody, req.body);
+    const execution = await deps.executions.runMany(actorOf(req), id, scriptIds, record);
     return reply.status(201).send(shape(executionResponse, { execution: dto(execution) }));
   });
 
@@ -146,13 +155,19 @@ export async function executionRoutes(app: FastifyInstance, deps: ExecutionRoute
     return shape(executionResponse, { execution: dto(await deps.executions.stop(actorOf(req), id)) });
   });
 
-  // The two routes below are called by the Jenkins build, not by a signed-in person. They
+  // The three routes below are called by the Jenkins build, not by a signed-in person. They
   // have no session guard: the service checks the run token.
   app.get('/executions/:id/script', async (req, reply) => {
     const { id } = parse(idParams, req.params);
     const content = await deps.executions.scriptFor(id, runToken(req), reportedBuildNumber(req));
     // Not JSON, so it is not passed through shape().
     return reply.type('text/plain; charset=utf-8').send(content);
+  });
+
+  // Every script of the run, for the build to write as test files. Called by the build, like the route above.
+  app.get('/executions/:id/scripts', async (req) => {
+    const { id } = parse(idParams, req.params);
+    return { files: await deps.executions.scriptsFor(id, runToken(req), reportedBuildNumber(req)) };
   });
 
   app.post('/executions/:id/result', async (req, reply) => {

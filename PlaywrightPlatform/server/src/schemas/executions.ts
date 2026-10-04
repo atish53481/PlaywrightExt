@@ -26,6 +26,13 @@ export const reportLinksResponse = z.object({
   reports: z.object({ overview: reportLink, playwright: reportLink, allure: reportLink }),
 });
 
+/** Several scripts of a project to run together, as one build. */
+export const runManyBody = z.object({
+  scriptIds: z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER)).min(1).max(50),
+  screenshots: z.boolean().default(true),
+  video: z.boolean().default(false),
+});
+
 /** What to record for every test of a run. Unknown keys are dropped. */
 export const runScriptBody = z.object({
   screenshots: z.boolean().default(true),
@@ -47,6 +54,8 @@ const executionDto = z.object({
   scriptId: z.number(),
   scriptName: z.string(),
   scriptVersion: z.number(),
+  /** Every script of the run: one for a run of a script, several for scripts run together. */
+  scripts: z.array(z.object({ id: z.number(), name: z.string(), version: z.number() })),
   status: z.enum(['QUEUED', 'RUNNING', 'PASSED', 'FAILED', 'ABORTED', 'ERROR']),
   stage: z.enum(['QUEUED', 'RUNNING', 'COMPLETED']),
   buildNumber: z.number().nullable(),
@@ -78,6 +87,7 @@ export function toExecutionDto(e: Execution, runReportUrl: string | null = null)
     scriptId: e.scriptId,
     scriptName: e.scriptName,
     scriptVersion: e.scriptVersion,
+    scripts: e.scripts,
     status: e.status,
     stage: e.stage,
     buildNumber: build,
@@ -122,6 +132,8 @@ const testResult = z.object({
   screenshot: artifactPath,
   video: artifactPath,
   trace: artifactPath,
+  // The test file the test is in. Dropped, not refused, when it is not a plain file name.
+  file: z.string().max(100).regex(/^[a-z0-9][a-z0-9-]{0,63}\.spec\.ts$/).optional().catch(undefined),
 });
 
 /** What the pipeline posts when the tests have run. Unknown keys, such as a status, are dropped. */
@@ -142,6 +154,8 @@ export const executionResultsResponse = z.object({
       status: z.enum(['PASSED', 'FAILED', 'SKIPPED']),
       durationMs: z.number(),
       errorMessage: z.string().nullable(),
+      /** The script the test belongs to; null when the build did not say. */
+      scriptName: z.string().nullable(),
       screenshotUrl: z.string().nullable(),
       videoUrl: z.string().nullable(),
       traceUrl: z.string().nullable(),
@@ -160,6 +174,7 @@ export function toResultDto(result: TestResult, execution: Execution) {
     status: result.status,
     durationMs: result.durationMs,
     errorMessage: result.errorMessage,
+    scriptName: result.scriptName,
     screenshotUrl: link(result.screenshotPath),
     videoUrl: link(result.videoPath),
     traceUrl: link(result.tracePath),

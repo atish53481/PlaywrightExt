@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { JenkinsClient, JenkinsError } from '../src/jenkins/jenkins-client';
-import { jobConfigXml, pipelineScript, playwrightVersionFromTag, runLabel, specName } from '../src/jenkins/pipeline';
+import { jobConfigXml, pipelineScript, playwrightVersionFromTag, runLabel, specFiles, specName } from '../src/jenkins/pipeline';
 import { jenkinsBuildUrl, jenkinsJobUrl, jenkinsReportUrl } from '../src/jenkins/urls';
 import { startJenkinsStub, type JenkinsStub } from './jenkins-stub';
 
@@ -180,8 +180,9 @@ describe('pipeline text', () => {
   });
 
   it('downloads the script on the agent with the run token, without echoing it', () => {
-    expect(script).toContain('"%PLATFORM_URL%/api/executions/%EXECUTION_ID%/script"');
-    expect(script).toContain('"$PLATFORM_URL/api/executions/$EXECUTION_ID/script"');
+    // One download brings every script of the run.
+    expect(script).toContain('-o scripts.json "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/scripts"');
+    expect(script).toContain('-o scripts.json "$PLATFORM_URL/api/executions/$EXECUTION_ID/scripts"');
     expect(script).toContain('Authorization: Bearer %RUN_TOKEN%');
     expect(script).toContain('X-Build-Number: %BUILD_NUMBER%');
     // Every line that carries the token: @ keeps cmd from echoing it, set +x keeps sh from echoing it.
@@ -239,10 +240,13 @@ describe('pipeline text', () => {
     expect(script).toContain("reportName: label || \\'Allure Report\\'");
     // The label never appears on a command line.
     for (const line of script.split('\n').filter((l) => /\b(sh|bat)\b/.test(l))) expect(line).not.toContain('RUN_LABEL');
-    // The file name does, so only a plain slug is let through.
-    expect(script).toContain("def spec = (params.SPEC_NAME ?: '') ==~ /[a-z0-9][a-z0-9-]{0,60}/ ? params.SPEC_NAME : 'script'");
-    expect(script).toContain("-o tests/' + spec + '.spec.ts ");
-    expect(script).toContain("-o tests\\\\' + spec + '.spec.ts ");
+    // No file name on a command line: the container writes the test files, and only plain names.
+    expect(script).not.toContain('SPEC_NAME');
+    expect(script).toContain("writeFile file: 'unpack-scripts.cjs'");
+    expect(script).toContain('node unpack-scripts.cjs && npm install --no-audit --no-fund');
+    expect(script).toContain("fs.writeFileSync(\\'tests/\\' + file.name, String(file.content));");
+    // Each test says which file it is in, which is how the platform knows its script.
+    expect(script).toContain("entry.file = String(spec.file).split(\\'/\\').pop();");
   });
 
   it.each([
@@ -265,14 +269,29 @@ describe('pipeline text', () => {
     expect(runLabel(7, 'n'.repeat(500), 3).length).toBeLessThan(130);
   });
 
-  it('wraps the pipeline in a job definition with eight parameters declared and markup escaped', () => {
+  it('gives each script of a run a file name of its own', () => {
+    expect(
+      specFiles([
+        { id: 4, name: 'Login Test' },
+        { id: 9, name: 'login test!' },
+        { id: 11, name: 'Cart' },
+        { id: 12, name: 'LOGIN  TEST' },
+      ]),
+    ).toEqual([
+      { id: 4, file: 'login-test.spec.ts' },
+      { id: 9, file: 'login-test-2.spec.ts' },
+      { id: 11, file: 'cart.spec.ts' },
+      { id: 12, file: 'login-test-3.spec.ts' },
+    ]);
+  });
+
+  it('wraps the pipeline in a job definition with seven parameters declared and markup escaped', () => {
     const xml = jobConfigXml(IMAGE);
-    expect(xml.match(/<name>/g)).toHaveLength(8);
+    expect(xml.match(/<name>/g)).toHaveLength(7);
     // A build started by hand in Jenkins records as a run started without a choice does.
     expect(xml).toMatch(/<name>SCREENSHOTS<\/name>\s*<defaultValue>on<\/defaultValue>/);
     expect(xml).toMatch(/<name>VIDEO<\/name>\s*<defaultValue>off<\/defaultValue>/);
     expect(xml).toContain('<name>RUN_LABEL</name>');
-    expect(xml).toContain('<name>SPEC_NAME</name>');
     expect(xml).toContain('<name>EXECUTION_ID</name>');
     expect(xml).toContain('<name>PLATFORM_URL</name>');
     expect(xml).toContain('<hudson.model.PasswordParameterDefinition>');

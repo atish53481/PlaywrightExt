@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { JOB, poll, run, setBuild, STARTED, startRun, startWorld, type RunWorld } from './execution-helpers';
 import { closeApp } from './helpers';
 import { startJenkinsStub, type JenkinsStub } from './jenkins-stub';
-import { newScript, SAMPLE } from './script-helpers';
+import { newProject, newScript, SAMPLE } from './script-helpers';
 
 type Headers = Record<string, string>;
 
@@ -54,7 +54,8 @@ describe('executions: stop and the pipeline endpoints', () => {
 
       const res = await results(id);
       expect(res.statusCode).toBe(200);
-      const none = { screenshotUrl: null, videoUrl: null, traceUrl: null };
+      // In a run of one script every test belongs to that script.
+      const none = { scriptName: 'Login Test', screenshotUrl: null, videoUrl: null, traceUrl: null };
       expect(res.json().items).toEqual([
         { name: 'login > signs in', status: 'PASSED', durationMs: 1200, errorMessage: null, ...none },
         { name: 'login > rejects a bad password', status: 'FAILED', durationMs: 3400, errorMessage: 'expected title', ...none },
@@ -360,6 +361,130 @@ describe('executions: stop and the pipeline endpoints', () => {
       expect((await open(url)).statusCode).toBe(200);
       world.clock.t += 60 * 60_000 + 1_000;
       expect((await open(url)).statusCode).toBe(401);
+    });
+  });
+
+  describe('scripts run together', () => {
+    const together = (payload: object, headers: Headers = world.asUser, projectId: number = world.projectId) =>
+      world.ctx.app.inject({ method: 'POST', url: `/api/projects/${projectId}/run`, headers, payload });
+    const triggers = () => stub.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/buildWithParameters'));
+    const state = async (scriptId: number): Promise<string> =>
+      (await world.ctx.db('test_scripts').where({ id: scriptId }).first()).lifecycle_state;
+
+    it('starts one Jenkins build for all of them, and the build downloads every script', async () => {
+      const cart = await newScript(world.ctx, world.asAdmin, world.projectId, { name: 'Cart Test' });
+      const res = await together({ scriptIds: [cart.id, world.scriptId, cart.id], video: true });
+      expect(res.statusCode).toBe(201);
+      const execution = res.json().execution;
+      expect(execution).toMatchObject({ status: 'QUEUED', scriptId: world.scriptId, scriptName: 'Login Test' });
+      expect(execution.scripts).toEqual([
+        { id: world.scriptId, name: 'Login Test', version: 1 },
+        { id: cart.id, name: 'Cart Test', version: 1 },
+      ]);
+
+      // One run, one build.
+      expect(triggers()).toHaveLength(1);
+      expect(await world.ctx.db('test_executions').count('* as n').first()).toEqual({ n: 1 });
+      expect(await world.ctx.db('execution_scripts').where({ execution_id: execution.id }).count('* as n').first()).toEqual({ n: 2 });
+      expect(stub.lastParams).toMatchObject({
+        EXECUTION_ID: String(execution.id),
+        RUN_LABEL: `Run #${execution.id} - 2 scripts`,
+        SCREENSHOTS: 'on',
+        VIDEO: 'on',
+      });
+
+      const files = await world.ctx.app.inject({
+        method: 'GET',
+        url: `/api/executions/${execution.id}/scripts`,
+        headers: { ...bearer(stub.lastParams.RUN_TOKEN), 'x-build-number': '41' },
+      });
+      expect(files.statusCode).toBe(200);
+      expect(files.json().files).toEqual([
+        { name: 'login-test.spec.ts', content: SAMPLE },
+        { name: 'cart-test.spec.ts', content: SAMPLE },
+      ]);
+      expect((await row(execution.id)).jenkins_build_number).toBe(41);
+      // Only the run's own token opens them.
+      const refused = await world.ctx.app.inject({ method: 'GET', url: `/api/executions/${execution.id}/scripts`, headers: bearer('nope') });
+      expect(refused.statusCode).toBe(401);
+
+      // The build is running in Jenkins.
+      setBuild(stub, (await row(execution.id)).jenkins_queue_id, 41);
+      // The run is in the history of both scripts, and neither can be started again meanwhile.
+      for (const scriptId of [world.scriptId, cart.id]) {
+        const history = await world.ctx.app.inject({ method: 'GET', url: `/api/scripts/${scriptId}/executions`, headers: world.asViewer });
+        expect(history.json().items.map((item: { id: number }) => item.id)).toEqual([execution.id]);
+        const again = await run(world, world.asUser, scriptId);
+        expect(again.statusCode).toBe(409);
+        expect(again.json().error).toMatchObject({ code: 'RUN_IN_PROGRESS', details: { executionId: execution.id } });
+      }
+      expect(triggers()).toHaveLength(1);
+    });
+
+    it('gives each test to its script, and judges each script by its own tests', async () => {
+      const cart = await newScript(world.ctx, world.asAdmin, world.projectId, { name: 'Cart Test' });
+      const idle = await newScript(world.ctx, world.asAdmin, world.projectId, { name: 'Never Reported' });
+      const execution = (await together({ scriptIds: [world.scriptId, cart.id, idle.id] })).json().execution;
+      const queue = (await row(execution.id)).jenkins_queue_id;
+      const tests = [
+        { name: 'signs in', status: 'PASSED', durationMs: 10, file: 'login-test.spec.ts' },
+        { name: 'adds an item', status: 'PASSED', durationMs: 10, file: 'cart-test.spec.ts' },
+        { name: 'checks out', status: 'FAILED', durationMs: 10, errorMessage: 'no button', file: 'cart-test.spec.ts' },
+        { name: 'stray', status: 'PASSED', durationMs: 1, file: '../../etc/passwd' },
+      ];
+      expect((await postResult(execution.id, stub.lastParams.RUN_TOKEN, { total: 4, passed: 3, failed: 1, skipped: 0, tests })).statusCode).toBe(204);
+      setBuild(stub, queue, 41, { building: false, result: 'UNSTABLE', duration: 9_000 });
+      expect((await poll(world, execution.id)).json().execution).toMatchObject({ status: 'FAILED', total: 4, passed: 3, failed: 1 });
+
+      const results = await world.ctx.app.inject({ method: 'GET', url: `/api/executions/${execution.id}/results`, headers: world.asViewer });
+      expect(results.json().items.map((item: { name: string; scriptName: string | null }) => [item.name, item.scriptName])).toEqual([
+        ['signs in', 'Login Test'],
+        ['adds an item', 'Cart Test'],
+        ['checks out', 'Cart Test'],
+        // A file name the platform did not hand out names no script.
+        ['stray', null],
+      ]);
+
+      // The build failed as a whole, yet the script whose tests all passed is marked passed.
+      expect(await state(world.scriptId)).toBe('PASSED');
+      expect(await state(cart.id)).toBe('FAILED');
+      expect(await state(idle.id)).not.toBe('PASSED');
+      expect(await state(idle.id)).not.toBe('FAILED');
+
+      // One report page for the run names every script and says which script each test is in.
+      const page = await world.ctx.app.inject({ method: 'GET', url: (await poll(world, execution.id)).json().execution.runReportUrl });
+      expect(page.statusCode).toBe(200);
+      expect(page.body).toContain('<h1>3 scripts run together</h1>');
+      expect(page.body).toContain('one Jenkins build');
+      expect(page.body).toContain('<th>Script</th>');
+      expect(page.body).toContain('<td class="name">Cart Test</td><td class="name">checks out');
+
+      // Deleting one of the scripts leaves the build: it also holds the reports of the others.
+      const deleted = await world.ctx.app.inject({ method: 'DELETE', url: `/api/scripts/${cart.id}`, headers: world.asUser });
+      expect(deleted.statusCode).toBe(204);
+      expect(stub.requests.filter((req) => req.path.endsWith('/doDelete'))).toEqual([]);
+      expect(stub.builds.has(`${JOB}/41`)).toBe(true);
+    });
+
+    it('refuses scripts of another project, an unknown script, an empty choice, and a VIEWER', async () => {
+      const elsewhere = await newProject(world.ctx, world.asAdmin, 'Other Project');
+      const foreign = await newScript(world.ctx, world.asAdmin, elsewhere, { name: 'Foreign Test' });
+      for (const scriptIds of [[world.scriptId, foreign.id], [world.scriptId, 999_999]]) {
+        expect((await together({ scriptIds })).statusCode).toBe(404);
+      }
+      expect((await together({ scriptIds: [] })).statusCode).toBe(400);
+      expect((await together({ scriptIds: ['1'] })).statusCode).toBe(400);
+      expect((await together({})).statusCode).toBe(400);
+      expect((await together({ scriptIds: [world.scriptId] }, world.asViewer)).statusCode).toBe(403);
+      expect((await together({ scriptIds: [world.scriptId] }, {})).statusCode).toBe(401);
+      // Nothing was recorded and Jenkins was never asked.
+      expect(await world.ctx.db('test_executions').count('* as n').first()).toEqual({ n: 0 });
+      expect(triggers()).toHaveLength(0);
+
+      // One script alone is a run like any other.
+      const single = await together({ scriptIds: [world.scriptId] });
+      expect(single.statusCode).toBe(201);
+      expect(stub.lastParams.RUN_LABEL).toBe(`Run #${single.json().execution.id} - Login Test - v1`);
     });
   });
 
