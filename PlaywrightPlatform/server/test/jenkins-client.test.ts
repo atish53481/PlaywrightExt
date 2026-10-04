@@ -152,6 +152,16 @@ describe('pipeline text', () => {
     expect(script).toContain('-e HOME=/tmp');
   });
 
+  it('keeps the installed packages in a Docker volume, one for each executor', () => {
+    // On a Windows agent the workspace is a slow mount: packages kept there cost a minute a build.
+    expect(script).toContain('-v "playwright-node-modules-%EXECUTOR_NUMBER%:/work/node_modules"');
+    expect(script).toContain('-v "playwright-node-modules-$EXECUTOR_NUMBER:/work/node_modules"');
+    // Both lines that start the container for a command mount it.
+    expect(dockerRuns.filter((line) => line.includes(':/work/node_modules'))).toHaveLength(2);
+    // On Linux a new volume belongs to root, and the container does not run as root.
+    expect(script).toMatch(/chmod 0777 \/tmp\/\.npm \/modules/);
+  });
+
   it('takes the image from the PLAYWRIGHT_IMAGE parameter', () => {
     expect(script).toContain('"%PLAYWRIGHT_IMAGE%"');
     expect(script).toContain('"$PLAYWRIGHT_IMAGE"');

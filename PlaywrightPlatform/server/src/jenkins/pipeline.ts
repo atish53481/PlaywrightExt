@@ -138,12 +138,15 @@ def onAgent(String unix, String windows) {
 
 // One command inside the Playwright image, in the workspace. Returns the exit code.
 // The container gets the workspace and the npm cache, and no parameter of the build.
+// The installed packages live in a Docker volume, not in the workspace: on a Windows agent
+// the workspace is a slow mount, and installing and loading packages there costs a minute a
+// build. Each executor has its own volume, so two builds at once do not share one.
 // On Linux it writes as the agent's user: files owned by root could not be cleared by the next build.
 def inImage(String command) {
   def flags = '--rm --init --ipc=host -e npm_config_cache=/tmp/.npm -v playwright-npm-cache:/tmp/.npm -w /work'
   return onAgent(
-    'docker run ' + flags + ' -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$WORKSPACE:/work" "$PLAYWRIGHT_IMAGE" sh -c \\'' + command + '\\'',
-    'docker run ' + flags + ' -v "%WORKSPACE%:/work" "%PLAYWRIGHT_IMAGE%" sh -c "' + command + '"'
+    'docker run ' + flags + ' -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$WORKSPACE:/work" -v "playwright-node-modules-$EXECUTOR_NUMBER:/work/node_modules" "$PLAYWRIGHT_IMAGE" sh -c \\'' + command + '\\'',
+    'docker run ' + flags + ' -v "%WORKSPACE%:/work" -v "playwright-node-modules-%EXECUTOR_NUMBER%:/work/node_modules" "%PLAYWRIGHT_IMAGE%" sh -c "' + command + '"'
   )
 }
 
@@ -170,7 +173,7 @@ pipeline {
           }
           // A new volume belongs to root; the container on Linux does not run as root.
           if (isUnix()) {
-            sh 'docker run --rm -v playwright-npm-cache:/tmp/.npm "$PLAYWRIGHT_IMAGE" chmod 0777 /tmp/.npm'
+            sh 'docker run --rm -v playwright-npm-cache:/tmp/.npm -v "playwright-node-modules-$EXECUTOR_NUMBER:/modules" "$PLAYWRIGHT_IMAGE" chmod 0777 /tmp/.npm /modules'
           }
         }
       }

@@ -265,8 +265,12 @@ and press **Create Job** again (the version is written into the job).
 
 The first build pulls the image, about 1 to 2 GB, and is slow. Run
 `docker pull mcr.microsoft.com/playwright:v1.63.0-noble` on the agent beforehand to avoid
-that. Later builds reuse the image and an npm cache kept in the Docker volume
-`playwright-npm-cache`, and take well under a minute before the tests start.
+that. Later builds reuse the image and two kinds of Docker volume: the npm cache
+(`playwright-npm-cache`) and the installed packages (`playwright-node-modules-<executor>`,
+one for each Jenkins executor). The packages are kept out of the workspace on purpose: on
+Windows the workspace is a slow mount, and packages kept there cost about a minute a build.
+With the volumes a short script finishes in about 15 seconds. To start clean, remove them
+with `docker volume rm`; the next build fills them again.
 
 **The address Jenkins calls back**
 
