@@ -96,7 +96,7 @@ export async function buildApp({ config, db, webRoot, now = Date.now }: AppDeps)
     jenkinsService,
     audit,
     transact,
-    { publicUrl: config.publicUrl, now },
+    { publicUrl: config.publicUrl, now, playwrightImage: config.playwrightDockerImage },
     app.log,
   );
 

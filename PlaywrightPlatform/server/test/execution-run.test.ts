@@ -48,6 +48,9 @@ describe('executions: start and read a run', () => {
     const token = stub.lastParams.RUN_TOKEN;
     expect(stub.lastParams.EXECUTION_ID).toBe('1');
     expect(stub.lastParams.PLATFORM_URL).toBe(world.ctx.config.publicUrl);
+    // The image the tests run in is the server's setting, sent with every run.
+    expect(stub.lastParams.PLAYWRIGHT_IMAGE).toBe('mcr.microsoft.com/playwright:v1.63.0-noble');
+    expect(stub.lastParams.PLAYWRIGHT_IMAGE).toBe(world.ctx.config.playwrightDockerImage);
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
     const [row] = await rows();

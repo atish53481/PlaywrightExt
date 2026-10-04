@@ -16,6 +16,8 @@ export interface ExecutionOptions {
   publicUrl: string;
   /** Milliseconds since the epoch. Passed in so tests can move time. */
   now: () => number;
+  /** The Playwright Docker image each build runs the tests in. */
+  playwrightImage: string;
 }
 
 function projectNotActive(): AppError {
@@ -145,6 +147,7 @@ export class ExecutionService {
         EXECUTION_ID: String(created.id),
         PLATFORM_URL: this.options.publicUrl,
         RUN_TOKEN: token,
+        PLAYWRIGHT_IMAGE: this.options.playwrightImage,
       });
       await this.executions.updateActive(created.id, { queueId });
     } catch (err) {
