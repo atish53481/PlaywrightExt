@@ -64,6 +64,9 @@ describe('loadConfig', () => {
     ['no tag', 'mcr.microsoft.com/playwright'],
     ['a bare name', 'playwright'],
     ['an empty tag', 'mcr.microsoft.com/playwright:'],
+    ['a tag that names no version', 'mcr.microsoft.com/playwright:latest'],
+    ['a quote', 'mcr.microsoft.com/playwright:v1.63.0"'],
+    ['a percent sign', 'mcr.microsoft.com/playwright:v1.63.0%PATH%'],
   ])('rejects a Playwright Docker image with %s', (_label, image) => {
     expect(() =>
       loadConfig({ DATABASE_URL: 'postgresql://u:p@localhost/db', SECRETS_ENCRYPTION_KEY: key, PLAYWRIGHT_DOCKER_IMAGE: image }),

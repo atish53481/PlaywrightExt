@@ -1,13 +1,30 @@
-// The Jenkins job the platform creates. Windows agents only: every command is a `bat` step.
-// The build receives EXECUTION_ID, PLATFORM_URL, and RUN_TOKEN (a password parameter, so
-// Jenkins masks it) and holds no secret in its definition.
+// The Jenkins job the platform creates. The tests run inside the official Playwright Docker
+// image, started with `docker run` from the agent's own shell, so the agent needs only Docker
+// and curl. One pipeline serves Windows and Linux agents: `isUnix()` chooses `sh` or `bat`.
+//
+// The build receives EXECUTION_ID, PLATFORM_URL, RUN_TOKEN (a password parameter), and
+// PLAYWRIGHT_IMAGE, and holds no secret in its definition. Only the agent talks to the
+// platform: the container is given the workspace and nothing else.
 
-const PACKAGE_JSON = `{
+/**
+ * The Playwright version an image tag names: `…/playwright:v1.63.0-noble` gives `1.63.0`.
+ * The build installs exactly this version of @playwright/test, because any other version
+ * looks for browsers the image does not have.
+ */
+export function playwrightVersionFromTag(image: string): string {
+  const match = /:v?(\d+\.\d+\.\d+)(-[A-Za-z0-9._-]+)?$/.exec(image);
+  if (!match) throw new Error(`The Playwright image "${image}" must name a version in its tag, such as v1.63.0-noble.`);
+  return match[1];
+}
+
+function packageJson(playwrightVersion: string): string {
+  return `{
   "name": "playwright-platform-run",
   "private": true,
-  "devDependencies": { "@playwright/test": "^1.49.0" }
+  "devDependencies": { "@playwright/test": "${playwrightVersion}" }
 }
 `;
+}
 
 const PLAYWRIGHT_CONFIG = `import { defineConfig, devices } from '@playwright/test';
 
@@ -19,8 +36,9 @@ export default defineConfig({
 });
 `;
 
-// Reads Playwright's JSON report and posts the counts to the platform. Exits quietly when
-// there is no report (the build failed before the tests ran); the platform then reports that.
+// Runs in the container after the tests. Reads Playwright's JSON report and writes the counts
+// to result-body.json, which the agent then posts to the platform. Writes nothing when there
+// is no report (the tests never started); the platform then reports that.
 const REPORT_SCRIPT = `const fs = require('node:fs');
 
 function firstError(suites) {
@@ -38,7 +56,9 @@ function firstError(suites) {
   return null;
 }
 
-async function main() {
+const plain = (text) => text.replace(/\\u001b\\[[0-9;]*m/g, '').slice(0, 2000);
+
+function main() {
   if (!fs.existsSync('results.json')) return;
   const report = JSON.parse(fs.readFileSync('results.json', 'utf8'));
   const stats = report.stats || {};
@@ -47,17 +67,16 @@ async function main() {
   const skipped = stats.skipped || 0;
   const body = { total: passed + failed + skipped, passed, failed, skipped };
   const message = firstError(report.suites);
-  if (message) body.errorMessage = message.replace(/\\u001b\\[[0-9;]*m/g, '').slice(0, 2000);
-  const url = process.env.PLATFORM_URL + '/api/executions/' + process.env.EXECUTION_ID + '/result';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + process.env.RUN_TOKEN },
-    body: JSON.stringify(body),
-  });
-  console.log('Reported result to the platform: HTTP ' + res.status);
+  if (message) body.errorMessage = plain(message);
+  fs.writeFileSync('result-body.json', JSON.stringify(body));
+  console.log('Wrote the result for the platform: ' + body.total + ' tests');
 }
 
-main().catch((err) => console.log('Could not report the result: ' + err.message));
+try {
+  main();
+} catch (err) {
+  console.log('Could not write the result: ' + err.message);
+}
 `;
 
 /** Groovy string literal with single quotes; backslashes and quotes are escaped. */
@@ -65,31 +84,84 @@ function groovy(text: string): string {
   return `'''${text.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'''`;
 }
 
-export function pipelineScript(): string {
-  return `pipeline {
+/**
+ * The pipeline for builds that use `image`. Only the image's Playwright version is written
+ * into the text; the image itself arrives with each build as the PLAYWRIGHT_IMAGE parameter.
+ */
+export function pipelineScript(image: string): string {
+  return `// One command line for the agent's own shell: sh on Linux, cmd on Windows. Returns the exit code.
+def onAgent(String unix, String windows) {
+  return isUnix() ? sh(returnStatus: true, script: unix) : bat(returnStatus: true, script: windows)
+}
+
+// One command inside the Playwright image, in the workspace. Returns the exit code.
+// The container gets the workspace and the npm cache, and no parameter of the build.
+// On Linux it writes as the agent's user: files owned by root could not be cleared by the next build.
+def inImage(String command) {
+  def flags = '--rm --init --ipc=host -e npm_config_cache=/tmp/.npm -v playwright-npm-cache:/tmp/.npm -w /work'
+  return onAgent(
+    'docker run ' + flags + ' -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$WORKSPACE:/work" "$PLAYWRIGHT_IMAGE" sh -c \\'' + command + '\\'',
+    'docker run ' + flags + ' -v "%WORKSPACE%:/work" "%PLAYWRIGHT_IMAGE%" sh -c "' + command + '"'
+  )
+}
+
+pipeline {
   agent any
   options { timeout(time: 30, unit: 'MINUTES') }
   stages {
+    stage('Preflight') {
+      steps {
+        // First, so a result left by an earlier build can never be posted for this one.
+        deleteDir()
+        script {
+          def reason = ''
+          if (onAgent('docker version', 'docker version') != 0) {
+            reason = 'Docker is not available on the Jenkins agent. Start Docker, and check that the account Jenkins runs as may use it.'
+          } else if (onAgent('docker image inspect --format "{{.Id}}" "$PLAYWRIGHT_IMAGE"', 'docker image inspect --format "{{.Id}}" "%PLAYWRIGHT_IMAGE%"') != 0
+              && onAgent('docker pull "$PLAYWRIGHT_IMAGE"', 'docker pull "%PLAYWRIGHT_IMAGE%"') != 0) {
+            reason = 'Could not pull ' + params.PLAYWRIGHT_IMAGE + '. Check the image name, and that the Jenkins agent can reach the registry.'
+          }
+          if (reason) {
+            // Posted by the agent in the post section, so the platform can say why the run ended.
+            writeFile file: 'result-body.json', text: '{"total":0,"passed":0,"failed":0,"skipped":0,"errorMessage":"' + reason + '"}'
+            error(reason)
+          }
+          // A new volume belongs to root; the container on Linux does not run as root.
+          if (isUnix()) {
+            sh 'docker run --rm -v playwright-npm-cache:/tmp/.npm "$PLAYWRIGHT_IMAGE" chmod 0777 /tmp/.npm'
+          }
+        }
+      }
+    }
     stage('Prepare') {
       steps {
-        deleteDir()
-        writeFile file: 'package.json', text: ${groovy(PACKAGE_JSON)}
+        writeFile file: 'package.json', text: ${groovy(packageJson(playwrightVersionFromTag(image)))}
         writeFile file: 'playwright.config.ts', text: ${groovy(PLAYWRIGHT_CONFIG)}
         writeFile file: 'report-result.cjs', text: ${groovy(REPORT_SCRIPT)}
-        bat 'if not exist tests mkdir tests'
-        bat '@curl -sS -f -H "Authorization: Bearer %RUN_TOKEN%" -H "X-Build-Number: %BUILD_NUMBER%" -o tests\\\\script.spec.ts "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/script"'
+        script {
+          // The agent downloads the script. "set +x" and "@" keep the shell from printing the line, and the token with it.
+          if (isUnix()) {
+            sh 'mkdir -p tests'
+            sh 'set +x; curl -sS -f -H "Authorization: Bearer $RUN_TOKEN" -H "X-Build-Number: $BUILD_NUMBER" -o tests/script.spec.ts "$PLATFORM_URL/api/executions/$EXECUTION_ID/script"'
+          } else {
+            bat 'if not exist tests mkdir tests'
+            bat '@curl -sS -f -H "Authorization: Bearer %RUN_TOKEN%" -H "X-Build-Number: %BUILD_NUMBER%" -o tests\\\\script.spec.ts "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/script"'
+          }
+        }
       }
     }
     stage('Install') {
       steps {
-        bat 'npm install --no-audit --no-fund'
-        bat 'npx playwright install chromium'
+        script {
+          if (inImage('npm install --no-audit --no-fund') != 0) { error('npm install failed inside the Playwright image.') }
+        }
       }
     }
     stage('Test') {
       steps {
         script {
-          def code = bat(returnStatus: true, script: 'npx playwright test')
+          // The result is written whatever the tests did; the container ends with the tests' own exit code.
+          def code = inImage('npx playwright test; rc=$?; node report-result.cjs; exit $rc')
           if (code != 0) { currentBuild.result = 'UNSTABLE' }
         }
       }
@@ -97,7 +169,15 @@ export function pipelineScript(): string {
   }
   post {
     always {
-      script { bat(returnStatus: true, script: 'node report-result.cjs') }
+      script {
+        if (fileExists('result-body.json')) {
+          if (isUnix()) {
+            sh(returnStatus: true, script: 'set +x; curl -sS -f -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $RUN_TOKEN" --data-binary @result-body.json "$PLATFORM_URL/api/executions/$EXECUTION_ID/result"')
+          } else {
+            bat(returnStatus: true, script: '@curl -sS -f -X POST -H "Content-Type: application/json" -H "Authorization: Bearer %RUN_TOKEN%" --data-binary @result-body.json "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/result"')
+          }
+        }
+      }
       archiveArtifacts artifacts: 'playwright-report/**', allowEmptyArchive: true
     }
   }
@@ -109,10 +189,11 @@ function xml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function jobConfigXml(): string {
+/** The job definition. `image` is the default of PLAYWRIGHT_IMAGE; each run also sends its own. */
+export function jobConfigXml(image: string): string {
   return `<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>Runs one Playwright script stored in the Playwright Platform. Managed by the platform: changes made here are overwritten.</description>
+  <description>Runs one Playwright script stored in the Playwright Platform, inside the Playwright Docker image. Managed by the platform: changes made here are overwritten.</description>
   <keepDependencies>false</keepDependencies>
   <properties>
     <hudson.model.ParametersDefinitionProperty>
@@ -130,11 +211,16 @@ export function jobConfigXml(): string {
         <hudson.model.PasswordParameterDefinition>
           <name>RUN_TOKEN</name>
         </hudson.model.PasswordParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>PLAYWRIGHT_IMAGE</name>
+          <defaultValue>${xml(image)}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
       </parameterDefinitions>
     </hudson.model.ParametersDefinitionProperty>
   </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
-    <script>${xml(pipelineScript())}</script>
+    <script>${xml(pipelineScript(image))}</script>
     <sandbox>true</sandbox>
   </definition>
   <triggers/>

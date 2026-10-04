@@ -82,7 +82,14 @@ export async function buildApp({ config, db, webRoot, now = Date.now }: AppDeps)
   const userService = new UserService(repos.users, audit, transact, app.log);
   const projectService = new ProjectService(repos.projects, audit, transact, app.log);
   const scriptService = new ScriptService(repos.scripts, repos.projects, repos.tags, audit, transact, app.log);
-  const jenkinsService = new JenkinsService(repos.jenkins, audit, transact, createSecretBox(config.secretsKey), app.log);
+  const jenkinsService = new JenkinsService(
+    repos.jenkins,
+    audit,
+    transact,
+    createSecretBox(config.secretsKey),
+    app.log,
+    config.playwrightDockerImage,
+  );
   const executionService = new ExecutionService(
     repos.executions,
     repos.scripts,

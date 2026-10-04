@@ -43,7 +43,9 @@ const envSchema = z.object({
   PLAYWRIGHT_DOCKER_IMAGE: z
     .string()
     .default('mcr.microsoft.com/playwright:v1.63.0-noble')
-    .refine((v) => /^[A-Za-z0-9][A-Za-z0-9._/-]*:[A-Za-z0-9._-]+$/.test(v), 'must be a docker image like registry/name:tag'),
+    .refine((v) => /^[A-Za-z0-9][A-Za-z0-9._/:-]*:[A-Za-z0-9._-]+$/.test(v), 'must be a docker image like registry/name:tag')
+    // The build installs the @playwright/test version the tag names, so the tag must name one.
+    .refine((v) => /:v?\d+\.\d+\.\d+(-[A-Za-z0-9._-]+)?$/.test(v), 'must name a Playwright version in its tag, such as v1.63.0-noble'),
 });
 
 export interface Config {

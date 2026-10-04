@@ -154,6 +154,9 @@ describe('jenkins settings', () => {
     expect(created.statusCode).toBe(200);
     expect(created.json()).toEqual({ created: true, jobUrl: `${stub.url}/job/playwright-platform-run/` });
     expect(stub.configs.get('playwright-platform-run')).toContain('<flow-definition');
+    // The job is made for the configured Playwright image.
+    expect(stub.configs.get('playwright-platform-run')).toContain('<name>PLAYWRIGHT_IMAGE</name>');
+    expect(stub.configs.get('playwright-platform-run')).toContain(`<defaultValue>${ctx.config.playwrightDockerImage}</defaultValue>`);
 
     expect((await call('POST', 'job', asAdmin)).json().created).toBe(false);
     expect(await ctx.db('audit_logs').where({ action: 'jenkins.job.create' }).count('* as n').first()).toEqual({ n: 2 });

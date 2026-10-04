@@ -75,6 +75,8 @@ export class JenkinsService {
     private readonly transact: Transact,
     private readonly box: SecretBox,
     private readonly log: FastifyBaseLogger,
+    /** The Playwright Docker image the job is made for: its tag sets the @playwright/test version. */
+    private readonly playwrightImage: string,
   ) {}
 
   /** The address and username are shown to an ADMIN only. */
@@ -147,7 +149,7 @@ export class JenkinsService {
     const link = await this.link();
     let created: boolean;
     try {
-      ({ created } = await link.client.createOrUpdateJob(link.jobName, jobConfigXml()));
+      ({ created } = await link.client.createOrUpdateJob(link.jobName, jobConfigXml(this.playwrightImage)));
     } catch (err) {
       throw toAppError(err);
     }
