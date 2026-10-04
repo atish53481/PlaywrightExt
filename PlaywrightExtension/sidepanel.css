@@ -254,7 +254,42 @@ select option { background: var(--bg3); }
   color: var(--danger); font-family: var(--mono); font-size: 11px;
   white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow-y: auto;
 }
-.run-error:empty, #run-counts:empty, #run-times:empty, #run-links:empty { display: none; }
+.run-error:empty, #run-counts:empty, #run-times:empty, #run-links:empty, .run-results:empty { display: none; }
+.run-results { display: flex; flex-direction: column; border-top: 1px solid var(--border); margin-top: 2px; }
+.result-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.result-row:last-child { border-bottom: none; }
+.result-name { flex: 1; min-width: 0; word-break: break-word; }
+.result-time { font-size: 11px; color: var(--text2); }
+.result-row .run-error, .result-files { flex-basis: 100%; }
+.result-shot {
+  flex-basis: 100%; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius); cursor: zoom-in;
+}
+.skills-pick {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 11px; color: var(--text2);
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; margin-bottom: 8px;
+}
+.skills-pick label { display: flex; align-items: center; gap: 4px; }
+.skills-pick .skills-pick-title { flex-basis: 100%; font-weight: 600; color: var(--text); }
+.diff-view {
+  font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word;
+  max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius);
+}
+.diff-view:empty { display: none; }
+.diff-line { padding: 0 6px; }
+.diff-add { background: rgba(63, 185, 80, 0.18); }
+.diff-del { background: rgba(248, 81, 73, 0.18); }
+.skills-auto { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.skill-row {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px;
+}
+.skill-row .item { flex: 1; min-width: 0; border: none; background: transparent; padding: 0; }
+.skill-row input[type="number"] { width: 56px; }
+.version-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text2); padding: 4px 0; }
+.version-row span { flex: 1; min-width: 0; word-break: break-word; }
 a.btn { text-decoration: none; }
 
 /* ---- COPY FLASH ---- */

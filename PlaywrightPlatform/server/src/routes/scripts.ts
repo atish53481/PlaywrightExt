@@ -22,6 +22,7 @@ import {
   versionListResponse,
   versionResponse,
 } from '../schemas/scripts';
+import type { ExecutionService } from '../services/execution-service';
 import type { ScriptService } from '../services/script-service';
 
 // A script holds up to 1,000,000 characters, which can exceed Fastify's 1 MiB default once encoded.
@@ -29,6 +30,7 @@ const SCRIPT_BODY_LIMIT = 2 * 1024 * 1024;
 
 export interface ScriptRouteDeps {
   scripts: ScriptService;
+  executions: ExecutionService;
 }
 
 export async function scriptRoutes(app: FastifyInstance, deps: ScriptRouteDeps): Promise<void> {
@@ -76,7 +78,10 @@ export async function scriptRoutes(app: FastifyInstance, deps: ScriptRouteDeps):
 
   app.delete('/scripts/:id', { preHandler: writers }, async (req, reply) => {
     const { id } = parse(idParams, req.params);
+    await deps.executions.assertIdle(id);
     await deps.scripts.remove(actorOf(req), id);
+    // The script's builds, with their logs and reports, go from Jenkins too.
+    await deps.executions.deleteBuilds(id);
     return reply.status(204).send();
   });
 

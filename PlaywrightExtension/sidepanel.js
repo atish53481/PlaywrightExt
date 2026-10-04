@@ -7,8 +7,12 @@ import { BridgeProvider } from './providers/bridge-provider.js';
 import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
 import { PlatformClient } from './utils/platform-client.js';
-import { countsText, durationText, isFinal, runControls, runLinks, runSummary, statusView } from './utils/execution-view.js';
-import { extractCode, looksLikeCode, sectionAfter } from './utils/code-extract.js';
+import {
+  countsText, deleteControls, durationText, isFinal, resultRows, runControls, runLinks, runSummary, statusView,
+} from './utils/execution-view.js';
+import { extractCode, looksLikeCode, pickFixedCode, sectionAfter, toSingleFile } from './utils/code-extract.js';
+import { diffStats, lineDiff } from './utils/line-diff.js';
+import { withSkills } from './utils/skill-context.js';
 import { PlaywrightCodegen } from './utils/playwright-codegen.js';
 import { TestRunner } from './utils/test-runner.js';
 
@@ -124,6 +128,88 @@ async function loadSettings() {
   });
 }
 
+// The skill versions that went into the latest agent request: [{ id, version }].
+let skillsUsed = [];
+
+// Skills unticked in the pick lists of the Planner, Generator, and Healer: left out of requests.
+const skillsExcluded = new Set();
+
+// The skills of the project chosen under Projects → Skills, or null when none is chosen or
+// the panel is not signed in to the platform.
+async function fetchSkillContext() {
+  const chosen = await Storage.getSkillsProject();
+  if (!chosen) return null;
+  const platform = await Storage.getPlatform();
+  if (!platform.url || !platform.token) return null;
+  return PlatformClient.getSkillContext(chosen.id);
+}
+
+// What the agents are given: those skills, less the ones unticked for this generation.
+async function loadSkillContext() {
+  const context = await fetchSkillContext();
+  return context ? { ...context, skills: context.skills.filter((skill) => !skillsExcluded.has(skill.id)) } : null;
+}
+
+// Above the input of each of the three agents: the project's skills, each with a tick, so a
+// generation can leave some out. Built with DOM methods; names come from the server.
+async function renderSkillPicks() {
+  let context = null;
+  try {
+    context = await fetchSkillContext();
+  } catch {
+    // No list is shown; a generation then runs without skills, as loadSkillContext decides.
+  }
+  for (const anchorId of ['planner-input', 'gen-input', 'healer-error']) {
+    const anchor = document.getElementById(anchorId)?.closest('.form-group');
+    if (!anchor) continue;
+    let box = anchor.previousElementSibling;
+    if (!box?.classList.contains('skills-pick')) {
+      box = document.createElement('div');
+      box.className = 'skills-pick';
+      anchor.before(box);
+    }
+    box.replaceChildren();
+    box.style.display = context && context.skills.length > 0 ? '' : 'none';
+    if (!context || context.skills.length === 0) continue;
+    const title = document.createElement('span');
+    title.className = 'skills-pick-title';
+    title.textContent = `🧠 Skills from ${context.project}`;
+    box.append(title, ...context.skills.map((skill) => {
+      const label = document.createElement('label');
+      const tick = document.createElement('input');
+      tick.type = 'checkbox';
+      tick.checked = !skillsExcluded.has(skill.id);
+      tick.dataset.skillId = String(skill.id);
+      tick.addEventListener('change', () => {
+        if (tick.checked) skillsExcluded.delete(skill.id);
+        else skillsExcluded.add(skill.id);
+        // The same skill in the other two panels follows.
+        document.querySelectorAll(`.skills-pick input[data-skill-id="${skill.id}"]`).forEach((other) => { other.checked = tick.checked; });
+      });
+      const name = document.createElement('span');
+      name.textContent = `${skill.name} v${skill.version}`;
+      label.append(tick, name);
+      return label;
+    }));
+  }
+}
+document.addEventListener('skills-project', renderSkillPicks);
+document.addEventListener('platform-auth', renderSkillPicks);
+document.querySelectorAll('.nav-btn[data-panel]').forEach((btn) => {
+  if (['planner', 'generator', 'healer'].includes(btn.getAttribute('data-panel'))) btn.addEventListener('click', renderSkillPicks);
+});
+
+// Shows in the top bar which project's skills the agents are using.
+async function showSkillsIndicator() {
+  const el = document.getElementById('skills-indicator');
+  if (!el) return;
+  const chosen = await Storage.getSkillsProject();
+  el.textContent = chosen ? `🧠 Skills: ${chosen.name}` : '';
+  el.style.display = chosen ? '' : 'none';
+}
+document.addEventListener('skills-project', showSkillsIndicator);
+showSkillsIndicator();
+
 function updateProvider(providerName, apiKey = '', model = '') {
   const providers = {
     mock:   () => new MockProvider(),
@@ -134,7 +220,8 @@ function updateProvider(providerName, apiKey = '', model = '') {
   };
   const factory = providers[providerName] || providers.mock;
   const provider = factory();
-  orchestrator.setProvider(provider);
+  // Every agent request carries the chosen project's skills, and Save to Project records which.
+  orchestrator.setProvider(withSkills(provider, loadSkillContext, (refs) => { skillsUsed = refs; }));
 
   const badge = document.getElementById('provider-badge');
   const label = document.getElementById('provider-label');
@@ -348,6 +435,9 @@ async function runCodeLive(code, { section, results, summary, btn, healBtn, idPr
 }
 
 // ---- 3. TEST HEALER ----
+// The Healer's latest answer as the model wrote it, fences included.
+let healerAnswer = '';
+
 function setupHealer() {
   const runBtn = document.getElementById('healer-run');
   const output = document.getElementById('healer-output');
@@ -362,6 +452,7 @@ function setupHealer() {
     try {
       const result = await orchestrator.dispatch('healer', { brokenCode, errorMessage, context });
       setOutput(output, result);
+      healerAnswer = typeof result === 'string' ? result : String(result ?? '');
     } catch(e) {
       output.textContent = `Error: ${e.message}`;
     } finally { runBtn.disabled = false; }
@@ -376,7 +467,99 @@ function setupHealer() {
     if (content) orchestrator.getAgent('export').exportAsMarkdown(content, 'healer-report');
   });
 
+  // ---- Saving a fix back to the platform script it came from ----
+  // Set by "Send to Healer" on a failed Jenkins run: { project, scriptId, name, version, content, runId }.
+  let healTarget = null;
+  const $h = (id) => document.getElementById(id);
+  const applyBox = $h('healer-apply');
+  const applyTarget = $h('healer-apply-target');
+  const fixBox = $h('healer-fix-box');
+  const fixed = $h('healer-fixed');
+  const diffEl = $h('healer-diff');
+  const applyStatus = $h('healer-apply-status');
+  const applyReady = applyBox && applyTarget && fixBox && fixed && diffEl && applyStatus;
+
+  function resetApply() {
+    if (!applyReady) return;
+    applyBox.style.display = healTarget ? '' : 'none';
+    fixBox.style.display = 'none';
+    diffEl.replaceChildren();
+    applyStatus.textContent = '';
+    if (healTarget) applyTarget.textContent = `This fix is for "${healTarget.name}" v${healTarget.version} in ${healTarget.project.name}.`;
+  }
+
+  // Shows, line by line, what saving would change in the stored script. Returns the number of changed lines.
+  function showChanges() {
+    const diff = lineDiff(healTarget.content, fixed.value);
+    const { added, removed } = diffStats(diff);
+    diffEl.replaceChildren(...diff.map((line) => {
+      const row = document.createElement('div');
+      row.className = `diff-line diff-${line.type}`;
+      row.textContent = `${line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '} ${line.text}`;
+      return row;
+    }));
+    applyStatus.textContent = added + removed === 0
+      ? 'No difference from the stored script yet.'
+      : `${added} line(s) added, ${removed} removed. Nothing is saved until you accept.`;
+    return added + removed;
+  }
+
+  async function accept(run) {
+    if (!healTarget) return;
+    if (showChanges() === 0) return;
+    if (!looksLikeCode(fixed.value)) { applyStatus.textContent = '❌ The fixed script is empty.'; return; }
+    const target = healTarget;
+    applyStatus.textContent = 'Saving…';
+    try {
+      const patch = {
+        content: fixed.value,
+        baseVersion: target.version,
+        changeSummary: `Healed after Jenkins run #${target.runId}`,
+        healed: true,
+      };
+      // The skills the Healer was given are recorded with the new version.
+      if (skillsUsed.length > 0) patch.skills = skillsUsed;
+      const script = await PlatformClient.updateScript(target.scriptId, patch);
+      healTarget = null;
+      resetApply();
+      showToast(`Saved "${script.name}" as v${script.version}`);
+      document.dispatchEvent(new CustomEvent('platform-script-saved', {
+        detail: { project: target.project, scriptId: script.id, run },
+      }));
+    } catch (err) {
+      applyStatus.textContent = err.code === 'VERSION_CONFLICT'
+        ? '❌ The script was changed after this run. Open it under Projects, run it, and heal that run.'
+        : `❌ ${err.message}`;
+    }
+  }
+
+  if (applyReady) {
+    document.addEventListener('heal-target', (event) => {
+      healTarget = event.detail;
+      healerAnswer = '';
+      resetApply();
+    });
+    $h('healer-review')?.addEventListener('click', () => {
+      if (!healTarget) return;
+      // The Healer's answer is a report; the complete fixed file in it is offered for saving.
+      // Without one, the stored script is put in the box to be edited by hand.
+      const code = toSingleFile(pickFixedCode(healerAnswer));
+      fixed.value = code ? (code.endsWith('\n') ? code : `${code}\n`) : healTarget.content;
+      fixBox.style.display = '';
+      showChanges();
+      if (!code) applyStatus.textContent = healerAnswer
+        ? 'The Healer\'s answer holds no complete test file. Edit the script here, following its advice.'
+        : 'Press Heal Test first, or edit the script here by hand.';
+    });
+    $h('healer-compare')?.addEventListener('click', () => { if (healTarget) showChanges(); });
+    $h('healer-accept')?.addEventListener('click', () => accept(false));
+    $h('healer-accept-run')?.addEventListener('click', () => accept(true));
+  }
+
   document.getElementById('healer-clear')?.addEventListener('click', () => {
+    healTarget = null;
+    healerAnswer = '';
+    resetApply();
     ['healer-code','healer-error','healer-context'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
     document.getElementById('healer-output').innerHTML = '<span class="output-placeholder">Healing analysis will appear here...</span>';
   });
@@ -876,8 +1059,16 @@ function setupPlatform() {
   });
 
   signOutBtn.addEventListener('click', async () => {
-    await PlatformClient.logout();
-    render(null);
+    signOutBtn.disabled = true;
+    try {
+      await PlatformClient.logout();
+      render(null);
+    } catch (err) {
+      // The token is dropped by logout() even when the server cannot be reached; say what happened.
+      render(null, `⚠️ Signed out here. ${err.message}`);
+    } finally {
+      signOutBtn.disabled = false;
+    }
   });
 }
 
@@ -934,7 +1125,15 @@ function setupSaveToProject() {
     }));
     if (projects.some((project) => String(project.id) === lastProjectId)) projectSelect.value = lastProjectId;
 
-    pending = { content: extractCode(text), source, language };
+    // Generated code is several files in one text; a stored script is one file that must run as it is.
+    const code = extractCode(text);
+    pending = {
+      content: source === 'GENERATED' ? toSingleFile(code) : code,
+      source,
+      language,
+      // Generated code is stored with the skill versions the agents were given.
+      skills: source === 'GENERATED' ? skillsUsed : [],
+    };
     nameInput.value = suggestName();
     descriptionInput.value = '';
     status.textContent = '';
@@ -969,7 +1168,10 @@ function setupSaveToProject() {
     suggestName: () => 'Generated Test',
   }));
 
-  confirmBtn.addEventListener('click', async () => {
+  const runAfterBtn = document.getElementById('save-project-run');
+
+  // Saves the script. With `run`, the Projects tab then opens it and starts it on Jenkins.
+  async function save(run) {
     if (!pending) return;
     const name = nameInput.value.trim();
     if (!name) {
@@ -978,26 +1180,37 @@ function setupSaveToProject() {
       return;
     }
     confirmBtn.disabled = true;
+    if (runAfterBtn) runAfterBtn.disabled = true;
     status.textContent = 'Saving…';
     try {
-      const script = await PlatformClient.saveScript(Number(projectSelect.value), {
+      const projectId = Number(projectSelect.value);
+      const projectName = projectSelect.selectedOptions[0]?.textContent || '';
+      const script = await PlatformClient.saveScript(projectId, {
         name,
         description: descriptionInput.value.trim(),
         content: pending.content,
         source: pending.source,
         language: pending.language,
+        skills: pending.skills,
       });
       lastProjectId = projectSelect.value;
       close();
-      showToast(`Saved "${script.name}" to the project`);
+      showToast(run ? `Saved "${script.name}" — starting it on Jenkins` : `Saved "${script.name}". Run it from the Projects tab.`);
+      document.dispatchEvent(new CustomEvent('platform-script-saved', {
+        detail: { project: { id: projectId, name: projectName }, scriptId: script.id, run },
+      }));
     } catch (err) {
       // textContent only: the message comes from the server. The dialog stays open so the
       // name can be changed and the save tried again.
       status.textContent = `❌ ${err.status === 401 ? EXPIRED : err.message}`;
     } finally {
       confirmBtn.disabled = false;
+      if (runAfterBtn) runAfterBtn.disabled = false;
     }
-  });
+  }
+
+  confirmBtn.addEventListener('click', () => save(false));
+  runAfterBtn?.addEventListener('click', () => save(true));
 
   cancelBtn.addEventListener('click', close);
   overlay.addEventListener('click', (event) => {
@@ -1014,7 +1227,13 @@ function setupSaveToProject() {
 function setupProjectsPanel() {
   const $ = (id) => document.getElementById(id);
   const message = $('projects-message');
-  const views = { list: $('projects-view-list'), scripts: $('projects-view-scripts'), script: $('projects-view-script') };
+  const views = {
+    list: $('projects-view-list'),
+    scripts: $('projects-view-scripts'),
+    script: $('projects-view-script'),
+    skills: $('projects-view-skills'),
+    skill: $('projects-view-skill'),
+  };
   const projectList = $('projects-list');
   const projectName = $('scripts-project-name');
   const searchInput = $('scripts-search');
@@ -1033,10 +1252,16 @@ function setupProjectsPanel() {
   const runError = $('run-error');
   const runLinksEl = $('run-links');
   const runHistory = $('run-history');
+  const runResults = $('run-results');
+  const deleteBtn = $('script-delete');
+  const deleteConfirm = $('script-delete-confirm');
+  const deleteYes = $('script-delete-yes');
+  const deleteNo = $('script-delete-no');
+  const healBtn = $('run-heal');
   const required = [
     message, views.list, views.scripts, views.script, projectList, projectName, searchInput, scriptList,
     scriptName, scriptMeta, scriptCode, runBtn, stopBtn, runNote, card, runStatus, runTitle, runCounts,
-    runTimes, runError, runLinksEl, runHistory,
+    runTimes, runError, runLinksEl, runHistory, runResults, deleteBtn, deleteConfirm, deleteYes, deleteNo,
   ];
   if (required.some((el) => !el)) return;
 
@@ -1051,8 +1276,12 @@ function setupProjectsPanel() {
     script: null,     // the open script, with its content
     execution: null,  // the run shown in the status card
     runs: [],         // the open script's recent runs
+    resultsFor: null, // id of the run whose tests are listed in the card
+    results: [],      // those tests, as rows
+    shotUrls: [],     // object URLs of the screenshots shown, to be released
     turn: 0,          // goes up on every navigation, so an answer that arrives late is dropped
     pollTimer: null,
+    pollSeq: 0,       // goes up whenever the watch is restarted or stopped
     searchTimer: null,
   };
 
@@ -1091,6 +1320,8 @@ function setupProjectsPanel() {
   function stopPolling() {
     clearTimeout(state.pollTimer);
     state.pollTimer = null;
+    // A request already on its way cannot be cancelled; its answer is dropped instead.
+    state.pollSeq += 1;
   }
 
   // Asks again in 3 seconds while the shown run is unfinished. A chain of timeouts, not an
@@ -1100,14 +1331,17 @@ function setupProjectsPanel() {
     const watched = state.execution;
     if (!watched || isFinal(watched.status)) return;
     const turn = state.turn;
+    const seq = state.pollSeq;
     state.pollTimer = setTimeout(async () => {
       try {
         const fresh = await PlatformClient.getExecution(watched.id);
+        // Stop or Run answered meanwhile and started a newer watch with newer state.
+        if (seq !== state.pollSeq) return;
         if (turn !== state.turn || state.execution?.id !== watched.id) return;
         say('');
         renderRun(fresh);
       } catch (err) {
-        if (turn !== state.turn) return;
+        if (seq !== state.pollSeq || turn !== state.turn) return;
         if (err.status === 401) { fail(err); return; }
         // One failed poll does not end the watch: the last known state stays on screen.
         say(`⚠️ ${err.message}`);
@@ -1128,6 +1362,97 @@ function setupProjectsPanel() {
     show(stopBtn, controls.showStop);
     runNote.textContent = controls.note;
     show(runNote, Boolean(controls.note));
+
+    const removal = deleteControls({
+      role: state.user?.role,
+      projectStatus: state.script?.projectStatus,
+      execution: state.execution,
+    });
+    show(deleteBtn, removal.showDelete);
+    deleteBtn.disabled = removal.deleteDisabled;
+    if (!removal.showDelete || removal.deleteDisabled) show(deleteConfirm, false);
+  }
+
+  // Lists the tests of a finished run in the card: the report, inside the panel. Built with
+  // DOM methods and textContent only, because test names and errors come from the server.
+  async function showResults(execution) {
+    // The Healer is offered for a run that did not pass, once it has ended.
+    if (healBtn) show(healBtn, Boolean(execution) && (execution.status === 'FAILED' || execution.status === 'ERROR'));
+    if (!execution || !isFinal(execution.status)) {
+      state.resultsFor = null;
+      state.results = [];
+      runResults.replaceChildren();
+      return;
+    }
+    if (state.resultsFor === execution.id) return;
+    state.resultsFor = execution.id;
+    state.results = [];
+    runResults.replaceChildren();
+    const turn = state.turn;
+    let rows;
+    try {
+      rows = resultRows(await PlatformClient.listExecutionResults(execution.id), state.jenkins?.baseUrl || '');
+    } catch {
+      // The card still shows the counts; the list is tried again the next time the run is drawn.
+      if (state.resultsFor === execution.id) state.resultsFor = null;
+      return;
+    }
+    if (turn !== state.turn || state.execution?.id !== execution.id) return;
+    state.results = rows;
+    for (const url of state.shotUrls) URL.revokeObjectURL(url);
+    state.shotUrls = [];
+    runResults.replaceChildren(...rows.map((result, index) => {
+      const row = document.createElement('div');
+      row.className = 'result-row';
+      const badge = document.createElement('span');
+      badge.className = result.className;
+      badge.textContent = result.label;
+      const name = document.createElement('span');
+      name.className = 'result-name';
+      name.textContent = result.name;
+      const time = document.createElement('span');
+      time.className = 'result-time';
+      time.textContent = result.duration;
+      row.append(badge, name, time);
+      if (result.error) {
+        const error = document.createElement('div');
+        error.className = 'run-error';
+        error.textContent = result.error;
+        row.append(error);
+      }
+      // What the build kept for a failed test: opened from Jenkins in a new tab.
+      if (result.links.length > 0) {
+        const files = document.createElement('div');
+        files.className = 'btn-row result-files';
+        files.append(...result.links.map(({ label, href }) => {
+          const link = document.createElement('a');
+          link.className = 'btn btn-icon';
+          link.textContent = label;
+          link.href = href;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          return link;
+        }));
+        row.append(files);
+      }
+      // The screenshot itself, read through the platform so no Jenkins sign-in is needed.
+      if (result.links.some((link) => link.label === 'Screenshot')) {
+        PlatformClient.getScreenshot(execution.id, index).then((blob) => {
+          if (state.resultsFor !== execution.id) return;
+          const url = URL.createObjectURL(blob);
+          state.shotUrls.push(url);
+          const shot = document.createElement('img');
+          shot.className = 'result-shot';
+          shot.alt = `Screenshot of the failed test ${result.name}`;
+          shot.src = url;
+          shot.addEventListener('click', () => window.open(url, '_blank', 'noopener'));
+          row.append(shot);
+        }).catch(() => {
+          // The Screenshot link above still opens it from Jenkins.
+        });
+      }
+      return row;
+    }));
   }
 
   function renderRuns() {
@@ -1173,6 +1498,7 @@ function setupProjectsPanel() {
     }
     renderControls();
     renderRuns();
+    showResults(execution);
   }
 
   async function loadRuns() {
@@ -1264,6 +1590,7 @@ function setupProjectsPanel() {
     state.script = null;
     state.execution = null;
     state.runs = [];
+    show(deleteConfirm, false);
     showView(null);
     say('Loading…');
     try {
@@ -1337,6 +1664,34 @@ function setupProjectsPanel() {
     }
   });
 
+  // Delete asks once more in the panel itself, then removes the script from the platform and
+  // its builds from Jenkins.
+  deleteBtn.addEventListener('click', () => show(deleteConfirm, true));
+  deleteNo.addEventListener('click', () => show(deleteConfirm, false));
+  deleteYes.addEventListener('click', async () => {
+    const script = state.script;
+    if (!script) return;
+    const turn = state.turn;
+    deleteYes.disabled = true;
+    say('Deleting…');
+    try {
+      await PlatformClient.deleteScript(script.id);
+      if (turn !== state.turn) return;
+      show(deleteConfirm, false);
+      showToast(`Deleted "${script.name}"`);
+      await loadScripts();
+    } catch (err) {
+      if (turn !== state.turn) return;
+      show(deleteConfirm, false);
+      fail(err);
+      // A run started elsewhere in the meantime: show it, which also disables Delete.
+      const inProgress = err.code === 'RUN_IN_PROGRESS' ? err.details?.executionId : null;
+      if (Number.isInteger(inProgress)) await selectRun(inProgress);
+    } finally {
+      deleteYes.disabled = false;
+    }
+  });
+
   $('projects-refresh')?.addEventListener('click', () => openList());
   $('scripts-back')?.addEventListener('click', () => openList());
   $('script-back')?.addEventListener('click', () => loadScripts());
@@ -1344,6 +1699,315 @@ function setupProjectsPanel() {
   searchInput.addEventListener('input', () => {
     clearTimeout(state.searchTimer);
     state.searchTimer = setTimeout(loadScripts, SEARCH_DELAY_MS);
+  });
+
+  // ---- Skills: the project's notes of rules and examples that the AI agents are given ----
+  const skillEls = {
+    list: $('skills-list'), crumb: $('skills-project-name'), auto: $('skills-auto'), actions: $('skills-actions'),
+    file: $('skill-file'), editorCrumb: $('skill-crumb'), name: $('skill-name'), description: $('skill-description'),
+    content: $('skill-content'), summary: $('skill-summary'), summaryRow: $('skill-summary-row'),
+    globalRow: $('skill-global-row'), global: $('skill-global'), save: $('skill-save'), archive: $('skill-archive'),
+    versionsSection: $('skill-versions-section'), versions: $('skill-versions'),
+    search: $('skills-search'), tags: $('skill-tags'), duplicate: $('skill-duplicate'), download: $('skill-download'),
+  };
+  // "smoke, Login , smoke" → ['smoke', 'Login']; the server applies the rules for a tag.
+  const tagList = (text) => [...new Set(String(text).split(',').map((tag) => tag.trim()).filter(Boolean))];
+  const skillsReady = views.skills && views.skill && Object.values(skillEls).every(Boolean);
+  const canWrite = () => state.user?.role === 'ADMIN' || state.user?.role === 'USER';
+  const UPLOAD_LIMIT = 300_000;  // bytes; the server's own limit is 200,000 characters
+  let editing = null;            // the skill in the editor; null while a new one is written
+  let newFileName = '';          // the uploaded file's name, kept with a new skill
+
+  async function openSkills() {
+    if (!skillsReady || !state.project) return;
+    const turn = ++state.turn;
+    stopPolling();
+    showView('skills');
+    say('Loading…');
+    skillEls.crumb.textContent = `${state.project.name} · Skills`;
+    show(skillEls.actions, canWrite());
+    const chosen = await Storage.getSkillsProject();
+    skillEls.auto.checked = chosen?.id === state.project.id;
+    const search = skillEls.search.value;
+    try {
+      const skills = await PlatformClient.listProjectSkills(state.project.id, search);
+      if (turn !== state.turn) return;
+      const none = search.trim()
+        ? 'No skills match the search.'
+        : 'No skills yet. A skill is a Markdown note of rules and examples that the AI agents follow.';
+      say(skills.length === 0 ? none : '');
+      skillEls.list.replaceChildren(...skills.map(skillRow));
+    } catch (err) {
+      if (turn === state.turn) fail(err);
+    }
+  }
+
+  // One skill in the list: a switch for this project, its name, and its place in the order.
+  function skillRow(skill) {
+    const row = document.createElement('div');
+    row.className = 'skill-row';
+
+    const use = document.createElement('input');
+    use.type = 'checkbox';
+    use.checked = skill.enabled;
+    use.disabled = !canWrite();
+    use.title = 'Use this skill in this project';
+    use.addEventListener('change', async () => {
+      try {
+        // Switching on a global skill the project does not have yet also attaches it.
+        await PlatformClient.setProjectSkill(state.project.id, skill.id, use.checked ? { attached: true, enabled: true } : { enabled: false });
+      } catch (err) {
+        use.checked = !use.checked;
+        fail(err);
+      }
+    });
+
+    const scope = skill.scope === 'GLOBAL' ? 'Global' : 'Project';
+    const detail = [scope, `v${skill.version}`, skill.description, ...skill.tags.map((tag) => `#${tag}`)].filter(Boolean).join(' · ');
+    const open = item(skill.name, detail, () => openSkill(skill.id));
+
+    const order = document.createElement('input');
+    order.type = 'number';
+    order.min = '1';
+    order.max = '1000';
+    order.value = String(skill.priority);
+    order.disabled = !canWrite();
+    order.title = 'Order: lower numbers are given to the agents first';
+    order.addEventListener('change', async () => {
+      const priority = Number(order.value);
+      if (!Number.isInteger(priority) || priority < 1 || priority > 1000) { order.value = String(skill.priority); return; }
+      try {
+        await PlatformClient.setProjectSkill(state.project.id, skill.id, { priority });
+        await openSkills();
+      } catch (err) {
+        order.value = String(skill.priority);
+        fail(err);
+      }
+    });
+
+    row.append(use, open, order);
+    return row;
+  }
+
+  // Shows a skill in the editor, or an empty editor for a new one (`preset` fills it from an upload).
+  function showEditor(skill, preset = {}) {
+    state.turn += 1;
+    editing = skill;
+    newFileName = skill ? '' : preset.fileName || '';
+    showView('skill');
+    say('');
+    const scope = skill?.scope === 'GLOBAL' ? 'Global skill' : 'Project skill';
+    skillEls.editorCrumb.textContent = skill ? `${scope} · v${skill.version}` : 'New skill';
+    skillEls.name.value = skill?.name ?? preset.name ?? '';
+    skillEls.description.value = skill?.description ?? preset.description ?? '';
+    skillEls.content.value = skill?.content ?? preset.content ?? '';
+    skillEls.tags.value = (skill?.tags ?? preset.tags ?? []).join(', ');
+    skillEls.summary.value = '';
+    skillEls.global.checked = false;
+    // A global skill is changed by an ADMIN only; everyone else reads it.
+    const writable = canWrite() && (!skill || skill.scope === 'PROJECT' || state.user?.role === 'ADMIN');
+    for (const el of [skillEls.name, skillEls.description, skillEls.content, skillEls.summary, skillEls.tags]) el.readOnly = !writable;
+    // A copy is a new skill of this project, so anyone who may write here can make one.
+    show(skillEls.duplicate, Boolean(skill) && canWrite());
+    show(skillEls.download, Boolean(skill));
+    show(skillEls.globalRow, !skill && state.user?.role === 'ADMIN');
+    show(skillEls.summaryRow, Boolean(skill) && writable);
+    show(skillEls.save, writable);
+    show(skillEls.archive, Boolean(skill) && writable);
+    skillEls.archive.textContent = 'Archive';
+    show(skillEls.versionsSection, Boolean(skill));
+    if (skill) loadSkillVersions(skill, writable);
+  }
+
+  async function openSkill(id) {
+    const turn = state.turn;
+    say('Loading…');
+    try {
+      const skill = await PlatformClient.getSkill(id);
+      if (turn === state.turn) showEditor(skill);
+    } catch (err) {
+      if (turn === state.turn) fail(err);
+    }
+  }
+
+  async function loadSkillVersions(skill, writable) {
+    const turn = state.turn;
+    skillEls.versions.replaceChildren();
+    try {
+      const versions = await PlatformClient.listSkillVersions(skill.id);
+      if (turn !== state.turn) return;
+      skillEls.versions.replaceChildren(...versions.map((version) => {
+        const row = document.createElement('div');
+        row.className = 'version-row';
+        const text = document.createElement('span');
+        text.textContent = [
+          `v${version.version}`,
+          version.changeSummary,
+          version.createdBy,
+          new Date(version.createdAt).toLocaleString(),
+        ].filter(Boolean).join(' · ');
+        row.append(text);
+        if (writable && version.version !== skill.version) {
+          const restore = document.createElement('button');
+          restore.className = 'btn btn-secondary btn-sm';
+          restore.textContent = 'Restore';
+          restore.addEventListener('click', async () => {
+            try {
+              const restored = await PlatformClient.restoreSkillVersion(skill.id, version.version);
+              showToast(`Restored v${version.version} as v${restored.version}`);
+              showEditor(restored);
+            } catch (err) {
+              fail(err);
+            }
+          });
+          row.append(restore);
+        }
+        return row;
+      }));
+    } catch (err) {
+      if (turn === state.turn) fail(err);
+    }
+  }
+
+  if (skillsReady) {
+    $('scripts-skills')?.addEventListener('click', () => openSkills());
+    $('skills-back')?.addEventListener('click', () => loadScripts());
+    $('skill-back')?.addEventListener('click', () => openSkills());
+    $('skill-new')?.addEventListener('click', () => showEditor(null));
+    $('skill-upload')?.addEventListener('click', () => skillEls.file.click());
+
+    // An uploaded file is only read as text and put in the editor; nothing is saved until Save.
+    skillEls.file.addEventListener('change', async () => {
+      const file = skillEls.file.files?.[0];
+      skillEls.file.value = '';
+      if (!file) return;
+      if (file.size > UPLOAD_LIMIT) { say('❌ That file is too large for a skill (300 KB at most).'); return; }
+      const content = await file.text();
+      const heading = /^#\s+(.+)$/m.exec(content)?.[1]?.trim();
+      const base = file.name.replace(/(\.skill)?\.(md|markdown|txt)$/i, '');
+      // The server takes a plain .md name only; any other name is simply not kept.
+      const fileName = /^[A-Za-z0-9][A-Za-z0-9._ -]*\.md$/.test(file.name) && file.name.length <= 120 ? file.name : '';
+      showEditor(null, { name: (heading || base).slice(0, 200), content, fileName });
+    });
+
+    skillEls.auto.addEventListener('change', async () => {
+      await Storage.saveSkillsProject(skillEls.auto.checked ? state.project : null);
+      document.dispatchEvent(new CustomEvent('skills-project'));
+    });
+
+    skillEls.save.addEventListener('click', async () => {
+      const body = {
+        name: skillEls.name.value.trim(),
+        description: skillEls.description.value.trim(),
+        content: skillEls.content.value,
+        tags: tagList(skillEls.tags.value),
+      };
+      if (!body.name) { say('❌ Enter a skill name.'); skillEls.name.focus(); return; }
+      if (!body.content.trim()) { say('❌ A skill cannot be empty.'); skillEls.content.focus(); return; }
+      skillEls.save.disabled = true;
+      try {
+        if (editing) {
+          const summary = skillEls.summary.value.trim();
+          const updated = await PlatformClient.updateSkill(editing.id, summary ? { ...body, changeSummary: summary } : body);
+          showToast(`Saved "${updated.name}" · v${updated.version}`);
+          showEditor(updated);
+        } else {
+          const global = skillEls.global.checked;
+          const created = await PlatformClient.createSkill(global ? null : state.project.id, { ...body, fileName: newFileName });
+          // A new global skill is put to use in the project it was written from.
+          if (global) await PlatformClient.setProjectSkill(state.project.id, created.id, { attached: true });
+          showToast(`Saved "${created.name}"`);
+          await openSkills();
+        }
+      } catch (err) {
+        fail(err);
+      } finally {
+        skillEls.save.disabled = false;
+      }
+    });
+
+    skillEls.search.addEventListener('input', () => {
+      clearTimeout(state.searchTimer);
+      state.searchTimer = setTimeout(openSkills, SEARCH_DELAY_MS);
+    });
+
+    // A copy opens in the editor as a new skill of this project; nothing is stored until Save.
+    skillEls.duplicate.addEventListener('click', () => {
+      if (!editing) return;
+      showEditor(null, {
+        name: `${editing.name} (copy)`.slice(0, 200),
+        description: editing.description,
+        content: skillEls.content.value,
+        tags: editing.tags,
+      });
+    });
+
+    // The skill as a .md file: what is in the editor, under its stored file name or one made from its name.
+    skillEls.download.addEventListener('click', () => {
+      if (!editing) return;
+      const slug = editing.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'skill';
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(new Blob([skillEls.content.value], { type: 'text/markdown' }));
+      link.download = editing.fileName || `${slug}.skill.md`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    });
+
+    // Archive asks once more by changing its own label; the second press does it.
+    skillEls.archive.addEventListener('click', async () => {
+      if (!editing) return;
+      if (skillEls.archive.textContent !== 'Confirm archive') { skillEls.archive.textContent = 'Confirm archive'; return; }
+      try {
+        await PlatformClient.archiveSkill(editing.id);
+        showToast(`Archived "${editing.name}"`);
+        await openSkills();
+      } catch (err) {
+        fail(err);
+      }
+    });
+  }
+
+  // "Save & Run on Jenkins" in the save dialog: show the saved script here and start it.
+  document.addEventListener('platform-script-saved', async (event) => {
+    const { project, scriptId, run } = event.detail;
+    if (!run) return;
+    document.querySelector('.nav-btn[data-panel="projects"]')?.click();
+    state.project = project;
+    projectName.textContent = project.name;
+    await openScript(scriptId);
+    // Run is missing or disabled when Jenkins is not set up, the role may not run, or a run
+    // is already going; the script page then says which.
+    if (state.script?.id === scriptId && runBtn.style.display !== 'none' && !runBtn.disabled) runBtn.click();
+  });
+
+  // A failed run goes to the Healer panel with the script and what Jenkins reported.
+  healBtn?.addEventListener('click', () => {
+    const execution = state.execution;
+    if (!execution || !state.script) return;
+    const failed = state.results.filter((result) => result.label === 'Failed');
+    const errors = failed.length > 0
+      ? failed.map((result) => `${result.name}\n${result.error}`).join('\n\n')
+      : execution.errorMessage || '';
+    const fill = (id, value) => { const el = document.getElementById(id); if (el) el.value = value; };
+    fill('healer-error', errors);
+    fill('healer-code', state.script.content);
+    fill('healer-context', `Jenkins run #${execution.id} of "${state.script.name}" v${execution.scriptVersion} ended ${statusView(execution.status).label}.`);
+    // A fix can be saved back only onto the version that ran: anything else would overwrite later work.
+    const current = execution.scriptVersion === state.script.version;
+    document.dispatchEvent(new CustomEvent('heal-target', {
+      detail: current && state.project
+        ? {
+            project: state.project,
+            scriptId: state.script.id,
+            name: state.script.name,
+            version: state.script.version,
+            content: state.script.content,
+            runId: execution.id,
+          }
+        : null,
+    }));
+    document.querySelector('.nav-btn[data-panel="healer"]')?.click();
+    showToast('Failed run sent to the Healer — press Heal Test');
   });
 
   // Sign-in, sign-out, and a changed role all start again from the project list.

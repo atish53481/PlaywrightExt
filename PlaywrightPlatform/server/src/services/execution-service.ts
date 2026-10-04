@@ -4,7 +4,7 @@ import { JenkinsError, type BuildState } from '../jenkins/jenkins-client';
 import { jenkinsReportUrl } from '../jenkins/urls';
 import type { Transact } from '../repositories';
 import type { AuditRepository } from '../repositories/audit-repository';
-import type { ExecutionPatch, ExecutionRepository } from '../repositories/execution-repository';
+import type { ExecutionPatch, ExecutionRepository, TestResult } from '../repositories/execution-repository';
 import type { ScriptRepository } from '../repositories/script-repository';
 import { hashToken, newToken, safeEqual } from '../security/tokens';
 import type { Actor, Execution, ExecutionStatus } from '../types';
@@ -49,15 +49,27 @@ export interface RunReport {
   failed: number;
   skipped: number;
   errorMessage?: string;
+  tests?: Array<{
+    name: string;
+    status: TestResult['status'];
+    durationMs: number;
+    errorMessage?: string;
+    screenshot?: string;
+    video?: string;
+    trace?: string;
+  }>;
 }
 
+const SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024;
+const IMAGE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg']);
 const SYNC_INTERVAL_MS = 2_000;
 const QUEUE_TIMEOUT_MS = 10 * 60_000;
 
 const FINAL: ReadonlySet<ExecutionStatus> = new Set<ExecutionStatus>(['PASSED', 'FAILED', 'ABORTED', 'ERROR']);
 
 const BUILD_FAILED_EARLY = 'The build failed before the tests ran. Open the Jenkins build for the log.';
-const BUILD_NOT_RUN = 'The build ended without running the tests. Open the Jenkins build for the log.';
+const NO_TESTS_RAN = 'No tests ran: the script could not be loaded, or has no tests. Open the Jenkins build for the log.';
+const BUILD_NOT_RUN ='The build ended without running the tests. Open the Jenkins build for the log.';
 const BUILD_LOST = 'Jenkins no longer has this run. Open the job in Jenkins to see what happened.';
 const QUEUE_TIMED_OUT = 'Jenkins did not start the build. Check that an agent is online.';
 
@@ -74,7 +86,9 @@ function outcomeOf(result: BuildState['result'], total: number): Outcome {
     case 'SUCCESS':
       return { status: 'PASSED' };
     case 'UNSTABLE':
-      return { status: 'FAILED' };
+      // Playwright also exits non-zero when the script does not compile or holds no tests.
+      // That is not a failed test, and the build may have reported why.
+      return total > 0 ? { status: 'FAILED' } : { status: 'ERROR', errorMessage: NO_TESTS_RAN, keepReported: true };
     case 'FAILURE':
       // The pipeline marks failing tests UNSTABLE, so FAILURE means the build itself broke,
       // unless it got far enough to report tests. The build may have said why it broke
@@ -135,6 +149,7 @@ export class ExecutionService {
         callbackTokenHash: hashToken(token),
         createdAt: this.nowDate(),
       });
+      await r.skills.snapshotForExecution(id, scriptId, current.version);
       await this.record(
         actor,
         'execution.run',
@@ -178,7 +193,15 @@ export class ExecutionService {
     const last = this.lastSync.get(id);
     if (last !== undefined && now - last < SYNC_INTERVAL_MS) return execution;
     this.lastSync.set(id, now);
-    await this.sync(execution, await this.jenkins.link());
+    let link: JenkinsLink;
+    try {
+      link = await this.jenkins.link();
+    } catch (err) {
+      // Settings removed, or a token the current key cannot read: the stored run is still the answer.
+      this.log.warn(`[EXECUTION] Run ${id} could not be checked against Jenkins: ${err instanceof Error ? err.message : String(err)}`);
+      return execution;
+    }
+    await this.sync(execution, link);
     return this.find(id);
   }
 
@@ -247,16 +270,99 @@ export class ExecutionService {
 
   /** Stores what the build reports. Status is never taken from here: it comes only from Jenkins. */
   async report(id: number, token: string, report: RunReport): Promise<void> {
-    await this.authorize(id, token);
-    const stored = await this.executions.updateActive(id, {
-      total: report.total,
-      passed: report.passed,
-      failed: report.failed,
-      skipped: report.skipped,
-      errorMessage: report.errorMessage ?? null,
+    const execution = await this.authorize(id, token);
+    const stored = await this.transact(async (r) => {
+      const updated = await r.executions.updateActive(id, {
+        total: report.total,
+        passed: report.passed,
+        failed: report.failed,
+        skipped: report.skipped,
+        errorMessage: report.errorMessage ?? null,
+      });
+      if (updated && report.tests) {
+        await r.executions.replaceResults(
+          id,
+          execution.scriptId,
+          report.tests.map((test) => ({
+            name: test.name,
+            status: test.status,
+            durationMs: test.durationMs,
+            errorMessage: test.errorMessage ?? null,
+            screenshotPath: test.screenshot ?? null,
+            videoPath: test.video ?? null,
+            tracePath: test.trace ?? null,
+          })),
+        );
+      }
+      return updated;
     });
     // False when the run reached a final status between the check and the write.
     if (!stored) throw badRunToken();
+  }
+
+  /** The tests of a run, as its build reported them. Empty until it has. */
+  async results(id: number): Promise<{ execution: Execution; items: TestResult[] }> {
+    return { execution: await this.find(id), items: await this.executions.listResults(id) };
+  }
+
+  /**
+   * The screenshot the build kept for one test of a run, fetched from Jenkins with the
+   * platform's own credentials so the person looking needs no Jenkins account. Only an
+   * image is passed on.
+   */
+  async screenshot(id: number, index: number): Promise<{ contentType: string; body: Buffer }> {
+    const execution = await this.find(id);
+    const result = (await this.executions.listResults(id))[index];
+    if (!result?.screenshotPath || execution.buildNumber === null) throw notFound('Screenshot');
+    const link = await this.jenkins.link();
+    let file: { contentType: string; body: Buffer };
+    try {
+      file = await link.client.artifact(execution.jobName, execution.buildNumber, result.screenshotPath, SCREENSHOT_MAX_BYTES);
+    } catch (err) {
+      if (err instanceof JenkinsError && err.kind === 'NOT_FOUND') throw notFound('Screenshot');
+      throw toAppError(err);
+    }
+    if (!IMAGE_TYPES.has(file.contentType)) throw notFound('Screenshot');
+    return file;
+  }
+
+  /** Refuses when the script has a run that Jenkins has not finished. */
+  async assertIdle(scriptId: number): Promise<void> {
+    let active = await this.executions.findActive(scriptId);
+    if (!active) return;
+    // A run nobody watched still reads as unfinished: ask Jenkins before refusing.
+    const link = await this.jenkins.link().catch(() => null);
+    if (link) {
+      await this.sync(active, link);
+      active = await this.executions.findActive(scriptId);
+    }
+    if (active) throw runInProgress(active.id);
+  }
+
+  /**
+   * Deletes from Jenkins the builds a script's runs produced, and reports how many. A build
+   * that cannot be deleted is left: Jenkins being down must not keep a script from being deleted.
+   */
+  async deleteBuilds(scriptId: number): Promise<number> {
+    const builds = await this.executions.buildsForScript(scriptId);
+    if (builds.length === 0) return 0;
+    const link = await this.jenkins.link().catch(() => null);
+    if (!link) {
+      this.log.warn(`[EXECUTION] Builds of script ${scriptId} were not deleted: Jenkins is not set up`);
+      return 0;
+    }
+    let deleted = 0;
+    for (const build of builds) {
+      try {
+        await link.client.deleteBuild(build.jobName, build.buildNumber);
+        deleted += 1;
+      } catch (err) {
+        if (!(err instanceof JenkinsError)) throw err;
+        this.log.warn(`[EXECUTION] Build ${build.buildNumber} of script ${scriptId} was not deleted: ${err.message}`);
+      }
+    }
+    this.log.info(`[EXECUTION] Deleted ${deleted} of ${builds.length} Jenkins builds of script ${scriptId}`);
+    return deleted;
   }
 
   /**

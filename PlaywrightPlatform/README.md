@@ -134,6 +134,49 @@ Once signed in, the Generator, Recorder, and Orchestrator panels show **💾 Sav
 beside Copy: choose a project and a name, and the script appears in that project's Scripts
 tab. Only TypeScript and JavaScript output can be saved.
 
+A stored script is one file. The Generator and Orchestrator produce page classes and tests
+as separate files, so Save joins them into one that runs as it is: the notice above the code
+is dropped, imports of the joined files are removed, and imports of the same package are
+merged. A recorded script is already one file and is stored unchanged.
+
+## Skills
+
+A skill is a Markdown note of rules, standards, and examples that the AI agents are given:
+"use TypeScript", "prefer `getByRole()`", "never hard-code credentials". Skills are managed
+in the extension (**Projects** tab → a project → **🧠 Skills**) and in the web app (a
+project's **Skills** tab); both do the same things: search by name, description, or tag,
+tags, **Duplicate**, and **Download .md**.
+
+- **Project skill**: belongs to one project. ADMIN and USER can write one with **+ New
+  Skill**, or load a `.md` file with **⬆ Upload .md** (the file is put in the editor; nothing
+  is stored until Save).
+- **Global skill**: an ADMIN ticks **Global skill** when creating it. Every project sees it
+  in its list and switches it on to use it. Only an ADMIN can change or archive it.
+- The checkbox on a row switches the skill on or off for that project; the number sets the
+  order (lower first; a project's own skill before a global one with the same number).
+- Changing the text makes a new **version**. The editor lists the versions and can restore
+  one, which writes it as a new version. **Archive** removes a skill from every list and
+  keeps it in the database for the scripts and runs that name it.
+
+**Using skills.** Tick **Use this project's skills in the Planner, Generator, and Healer** in
+a project's Skills view. From then on every request the agents send carries that project's
+switched-on skills, in order, and the top bar shows `🧠 Skills: <project>`. Untick it to
+stop. Above the input of each of the three agents the skills are listed with a tick each, so
+one generation can leave some out. A script saved from the Generator or Orchestrator records the skill versions it was
+made with (`script_skills`), and a run keeps them (`execution_skill_snapshots`).
+
+**Skills are untrusted text.** They are written by project members, so they are handled as
+data everywhere:
+
+- They are placed in the request as reference material under a heading that says so, below
+  the application's own instructions. The system prompt is never changed by a skill, and a
+  skill cannot close its own block or imitate another.
+- They are shown only as plain text, never rendered as HTML or Markdown, and never run.
+- An uploaded file name is kept only if it is a plain `.md` name; skill text is limited to
+  200,000 characters, and an upload to 300 KB.
+- The model can still be influenced by what a skill says, as by any text it reads. Give the
+  USER role only to people you trust to write the project's test standards.
+
 ## Run a script on Jenkins
 
 Runs are started, watched, and stopped in the extension's side panel. The extension talks
@@ -141,7 +184,8 @@ only to this server; the server talks to Jenkins.
 
 **What Jenkins needs**
 
-- The **Pipeline** plugin (`workflow-aggregator`). Test Connection reports whether it is there.
+- The **Pipeline** plugins: `workflow-job`, `workflow-cps`, and `pipeline-model-definition`
+  (installing "Pipeline" brings all three). Test Connection names any that are missing.
 - **Docker** on the machine that runs the builds: Docker Desktop on Windows (with Linux
   containers), or Docker Engine on Linux. The tests run inside the official Playwright
   image, started with `docker run`. One job serves Windows and Linux agents.
@@ -168,10 +212,32 @@ only to this server; the server talks to Jenkins.
 
 **Run (ADMIN or USER)**
 
+The short way: in the Recorder, Generator, or Orchestrator press **💾 Save to Project**, then
+**Save & Run on Jenkins**. The script is saved, the Projects tab opens it, and the run starts.
+A run that ends Failed or Error offers **🔧 Send to Healer**, which fills the Healer panel
+with the script and the errors Jenkins reported. After **Heal Test**, **Review fix for
+saving** puts the fixed file in an editable box and shows, line by line, what would change
+in the stored script. **Accept** saves it as a new version marked HEALED (with the skills
+the Healer was given); **Accept & Run on Jenkins** also runs it. Nothing is saved before
+Accept, and a fix is refused if the script was changed after the run it came from.
+
+For a script that is already stored:
+
 1. Open the **Projects** tab, a project, and a script.
 2. Press **Run on Jenkins**. The card shows Queued, Running, and then Passed or Failed with
    the test counts, the duration, and links to the Jenkins build and its Playwright report.
-3. **Stop** aborts a queued or running build. **Recent runs** lists the script's last 10 runs.
+3. When the run ends, the card lists every test with its status, its duration, and the
+   error of a failed one: the report, inside the panel. A failed test shows its screenshot
+   in the row (the platform reads it from Jenkins, so no Jenkins sign-in is needed), and has
+   **Screenshot**, **Video**, and **Trace** links to the files the build kept. The links open
+   from Jenkins, so for those you must be signed in to Jenkins in that browser; open a trace
+   at trace.playwright.dev. A script that does not compile, or
+   has no tests, ends as Error with the reason.
+4. **Stop** aborts a queued or running build. **Recent runs** lists the script's last 10 runs.
+5. **Delete** (ADMIN or USER, asked once more in the panel) removes the script from the
+   platform and deletes its builds, with their logs and reports, from Jenkins. It waits for
+   an unfinished run to end. If Jenkins cannot be reached the script is still deleted and
+   its builds stay in Jenkins. Deleting a script in the web app does the same.
 
 **How it works**
 
@@ -181,8 +247,8 @@ only to this server; the server talks to Jenkins.
   the agent does not have it. **Prepare** downloads that script version from this server
   with a one-time run token. **Install** and **Test** run `npm install` and
   `npx playwright test` (Chromium) inside the image, with the workspace mounted at `/work`.
-  The agent then posts the test counts back. The token works only for that run and only
-  until the run ends.
+  The agent then posts the test counts and each test's result back (stored in
+  `execution_results`). The token works only for that run and only until the run ends.
 - Only the agent talks to this server. The container is given the workspace and an npm
   cache, and never the run token or this server's address.
 - Status comes from Jenkins, and is read whenever someone looks at the run. A run nobody
@@ -218,8 +284,10 @@ machine can reach, and put the server behind HTTPS.
 
 **Limits**
 
-One script per run; Chromium only; the tests run headless. Per-test results, screenshots, and
-traces come with the reports release.
+One script per run; Chromium only; the tests run headless. Screenshots, videos, and traces
+are kept for failed tests only, and are linked from the panel rather than shown in it.
+After **Create Job** is pressed again, builds run in Docker, report per-test results, and
+keep those files; builds of an older job definition report counts only.
 
 ## Tests
 
@@ -255,7 +323,7 @@ All routes are under `/api`. Errors always look like
 | POST | `/projects/:projectId/scripts` | ADMIN, USER |
 | GET | `/scripts/:id` | signed in |
 | PUT | `/scripts/:id` | ADMIN, USER |
-| DELETE | `/scripts/:id` | ADMIN, USER (soft delete) |
+| DELETE | `/scripts/:id` | ADMIN, USER (soft delete; also deletes the script's Jenkins builds; 409 `RUN_IN_PROGRESS` during a run) |
 | POST | `/scripts/:id/duplicate` | ADMIN, USER |
 | GET | `/scripts/:id/versions` | signed in |
 | GET | `/scripts/:id/versions/:version` | signed in |
@@ -269,6 +337,20 @@ All routes are under `/api`. Errors always look like
 | POST | `/scripts/:id/run` | ADMIN, USER |
 | GET | `/scripts/:id/executions` | signed in (optional `?limit=`, 1 to 50) |
 | GET | `/executions/:id` | signed in |
+| GET | `/executions/:id/results` | signed in |
+| GET | `/executions/:id/results/:index/screenshot` | signed in (the image, fetched from Jenkins by the server) |
+| GET | `/projects/:projectId/skills` | signed in |
+| GET | `/projects/:projectId/skills/context` | signed in (what the agents are given) |
+| POST | `/projects/:projectId/skills` | ADMIN, USER |
+| PUT | `/projects/:projectId/skills/:skillId` | ADMIN, USER (attach, switch, order) |
+| POST | `/skills` | ADMIN (global skill) |
+| GET | `/skills/:id` | signed in |
+| PUT | `/skills/:id` | ADMIN, USER (a global skill: ADMIN) |
+| DELETE | `/skills/:id` | ADMIN, USER (archive; a global skill: ADMIN) |
+| GET | `/skills/:id/versions` | signed in |
+| GET | `/skills/:id/versions/:version` | signed in |
+| POST | `/skills/:id/versions/:version/restore` | ADMIN, USER (a global skill: ADMIN) |
+| GET | `/scripts/:id/skills` | signed in |
 | POST | `/executions/:id/stop` | ADMIN, USER |
 | GET | `/executions/:id/script` | run token (the Jenkins build) |
 | POST | `/executions/:id/result` | run token (the Jenkins build) |

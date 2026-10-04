@@ -31,6 +31,17 @@ export const Storage = {
     await this.set({ pas_platform: platform });
   },
 
+  // The project whose skills the agents use: { id, name }, or null for none.
+  async getSkillsProject() {
+    const data = await this.get('pas_skills_project');
+    return data.pas_skills_project || null;
+  },
+
+  async saveSkillsProject(project) {
+    if (project) await this.set({ pas_skills_project: { id: project.id, name: project.name } });
+    else await this.remove('pas_skills_project');
+  },
+
   async getRecordings() {
     const data = await this.get('pas_recordings');
     return data.pas_recordings || [];

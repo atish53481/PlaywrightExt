@@ -31,10 +31,11 @@ describe('jenkins client', () => {
     expect(stub.requests[0].authorization).toBe(`Basic ${Buffer.from('ci-user:ci-token').toString('base64')}`);
   });
 
-  it('reports whether a plugin is installed', async () => {
-    expect(await client.hasPlugin('workflow-aggregator')).toBe(true);
+  it('reports which plugins are missing', async () => {
+    stub.plugins = ['workflow-job'];
+    expect(await client.missingPlugins(['workflow-job', 'workflow-cps'])).toEqual(['workflow-cps']);
     stub.plugins = [];
-    expect(await client.hasPlugin('workflow-aggregator')).toBe(false);
+    expect(await client.missingPlugins(['workflow-job'])).toEqual(['workflow-job']);
   });
 
   it('creates a job that does not exist and updates one that does', async () => {
@@ -195,7 +196,11 @@ describe('pipeline text', () => {
     expect(post).toContain("fileExists('result-body.json')");
     expect(post).toContain('curl -sS -f -X POST -H "Content-Type: application/json" -H "Authorization: Bearer %RUN_TOKEN%" --data-binary @result-body.json "%PLATFORM_URL%/api/executions/%EXECUTION_ID%/result"');
     expect(post).toContain('--data-binary @result-body.json "$PLATFORM_URL/api/executions/$EXECUTION_ID/result"');
-    expect(post).toContain("archiveArtifacts artifacts: 'playwright-report/**'");
+    // The report, and the screenshot, video, and trace of each failed test.
+    expect(post).toContain("archiveArtifacts artifacts: 'playwright-report/**, test-results/**'");
+    expect(script).toContain("screenshot: \\'only-on-failure\\'");
+    // Each test's own result travels with the counts.
+    expect(script).toContain('tests: collectTests(report.suites, [], [])');
   });
 
   it('marks failing tests UNSTABLE and fails the build for anything else', () => {

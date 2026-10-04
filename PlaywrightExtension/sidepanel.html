@@ -34,6 +34,7 @@
       <span class="topbar-title">Playwright AI Studio</span>
       <span class="topbar-badge" id="provider-badge">MOCK</span>
       <span class="topbar-provider" id="provider-label">Mock Provider</span>
+      <span class="topbar-provider" id="skills-indicator" style="display:none"></span>
     </div>
     <div class="panels">
 
@@ -188,6 +189,23 @@
               <div class="output-header-btns"><button class="btn btn-icon" id="healer-copy">📋 Copy</button></div>
             </div>
             <div class="output-content" id="healer-output"><span class="output-placeholder">Healing analysis will appear here...</span></div>
+          </div>
+          <div id="healer-apply" class="settings-section" style="display:none">
+            <div class="projects-message" id="healer-apply-target"></div>
+            <div class="btn-row"><button class="btn btn-secondary btn-sm" id="healer-review">Review fix for saving</button></div>
+            <div id="healer-fix-box" style="display:none">
+              <div class="form-group">
+                <label for="healer-fixed">Fixed script (edit before saving)</label>
+                <textarea id="healer-fixed" rows="10" spellcheck="false"></textarea>
+              </div>
+              <div class="btn-row"><button class="btn btn-secondary btn-sm" id="healer-compare">Show changes</button></div>
+              <div id="healer-diff" class="diff-view"></div>
+              <div class="btn-row">
+                <button class="btn btn-secondary" id="healer-accept">Accept: save as new version</button>
+                <button class="btn btn-primary" id="healer-accept-run">Accept &amp; Run on Jenkins</button>
+              </div>
+            </div>
+            <div id="healer-apply-status" class="projects-message" role="status"></div>
           </div>
         </div>
       </div>
@@ -524,12 +542,69 @@
             <div class="btn-row">
               <button class="btn btn-secondary btn-sm" id="scripts-back">← Projects</button>
               <span class="crumb" id="scripts-project-name"></span>
+              <button class="btn btn-secondary btn-sm" id="scripts-skills">🧠 Skills</button>
             </div>
             <div class="form-group">
               <label for="scripts-search">Search scripts</label>
               <input type="text" id="scripts-search" maxlength="200" placeholder="Name, description, or tag">
             </div>
             <div class="item-list" id="scripts-list"></div>
+          </div>
+
+          <div class="projects-view" id="projects-view-skills" style="display:none">
+            <div class="btn-row">
+              <button class="btn btn-secondary btn-sm" id="skills-back">← Scripts</button>
+              <span class="crumb" id="skills-project-name"></span>
+            </div>
+            <label class="skills-auto"><input type="checkbox" id="skills-auto"> Use this project's skills in the Planner, Generator, and Healer</label>
+            <div class="btn-row" id="skills-actions">
+              <button class="btn btn-primary btn-sm" id="skill-new">+ New Skill</button>
+              <button class="btn btn-secondary btn-sm" id="skill-upload">⬆ Upload .md</button>
+              <input type="file" id="skill-file" accept=".md,.markdown,.txt,text/markdown,text/plain" style="display:none">
+            </div>
+            <div class="form-group">
+              <label for="skills-search">Search skills</label>
+              <input type="text" id="skills-search" maxlength="200" placeholder="Name, description, or tag">
+            </div>
+            <div class="item-list" id="skills-list"></div>
+          </div>
+
+          <div class="projects-view" id="projects-view-skill" style="display:none">
+            <div class="btn-row">
+              <button class="btn btn-secondary btn-sm" id="skill-back">← Skills</button>
+              <span class="crumb" id="skill-crumb"></span>
+            </div>
+            <div class="form-group">
+              <label for="skill-name">Name</label>
+              <input type="text" id="skill-name" maxlength="200">
+            </div>
+            <div class="form-group">
+              <label for="skill-description">Description (optional)</label>
+              <input type="text" id="skill-description" maxlength="2000">
+            </div>
+            <div class="form-group">
+              <label for="skill-tags">Tags (optional, separated by commas)</label>
+              <input type="text" id="skill-tags" maxlength="900" placeholder="smoke, login">
+            </div>
+            <label class="skills-auto" id="skill-global-row" style="display:none"><input type="checkbox" id="skill-global"> Global skill (any project can attach it)</label>
+            <div class="form-group">
+              <label for="skill-content">Skill text (Markdown)</label>
+              <textarea id="skill-content" rows="14" maxlength="200000" placeholder="# Login Automation Skill&#10;&#10;## Rules&#10;- Use TypeScript.&#10;- Prefer getByRole()."></textarea>
+            </div>
+            <div class="form-group" id="skill-summary-row">
+              <label for="skill-summary">What changed (optional)</label>
+              <input type="text" id="skill-summary" maxlength="500">
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-primary" id="skill-save">Save</button>
+              <button class="btn btn-secondary" id="skill-duplicate" style="display:none">Duplicate</button>
+              <button class="btn btn-secondary" id="skill-download" style="display:none">⬇ Download .md</button>
+              <button class="btn btn-secondary" id="skill-archive" style="display:none">Archive</button>
+            </div>
+            <div class="output-section" id="skill-versions-section" style="display:none">
+              <div class="output-header"><span>Versions</span></div>
+              <div class="item-list" id="skill-versions"></div>
+            </div>
           </div>
 
           <div class="projects-view" id="projects-view-script" style="display:none">
@@ -539,6 +614,14 @@
             <div class="btn-row">
               <button class="btn btn-primary" id="script-run" style="display:none">▶ Run on Jenkins</button>
               <button class="btn btn-danger" id="script-stop" style="display:none">⏹ Stop</button>
+              <button class="btn btn-secondary" id="script-delete" style="display:none">🗑 Delete</button>
+            </div>
+            <div id="script-delete-confirm" class="projects-message" style="display:none">
+              <div>Delete this script from the platform and its builds from Jenkins?</div>
+              <div class="btn-row">
+                <button class="btn btn-danger btn-sm" id="script-delete-yes">Delete</button>
+                <button class="btn btn-secondary btn-sm" id="script-delete-no">Cancel</button>
+              </div>
             </div>
             <div id="script-run-note" class="projects-message" style="display:none"></div>
             <div class="run-card" id="run-card" style="display:none">
@@ -549,7 +632,9 @@
               <div id="run-counts"></div>
               <div id="run-times"></div>
               <div id="run-error" class="run-error"></div>
+              <div id="run-results" class="run-results"></div>
               <div class="btn-row" id="run-links"></div>
+              <div class="btn-row"><button class="btn btn-secondary btn-sm" id="run-heal" style="display:none">🔧 Send to Healer</button></div>
             </div>
             <div class="output-section">
               <div class="output-header"><span>Recent runs</span></div>
@@ -680,7 +765,8 @@
     <div id="save-project-status" role="status" style="font-size:12px;color:var(--text2);padding:6px 0 0;min-height:20px"></div>
     <div class="btn-row" style="margin-top:8px;justify-content:flex-end">
       <button class="btn btn-secondary" id="save-project-cancel">Cancel</button>
-      <button class="btn btn-primary" id="save-project-confirm">Save</button>
+      <button class="btn btn-secondary" id="save-project-confirm">Save</button>
+      <button class="btn btn-primary" id="save-project-run">Save &amp; Run on Jenkins</button>
     </div>
   </div>
 </div>

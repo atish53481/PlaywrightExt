@@ -63,17 +63,37 @@
     const rect = el.getBoundingClientRect();
     const locators = [];
 
-    if (el.getAttribute('data-testid')) locators.push({ strategy: 'data-testid', locator: `locator('[data-testid="${el.getAttribute('data-testid')}"]')`, score: 100 });
-    if (el.getAttribute('aria-label')) locators.push({ strategy: 'aria-label', locator: `getByLabel('${el.getAttribute('aria-label')}')`, score: 85 });
-    if (el.getAttribute('placeholder')) locators.push({ strategy: 'placeholder', locator: `getByPlaceholder('${el.getAttribute('placeholder')}')`, score: 70 });
+    // How many elements on the page a locator would match. A recorded step must match one:
+    // Playwright refuses to click a locator that matches several.
+    const sameAttr = (attr) => {
+      const value = el.getAttribute(attr);
+      return [...document.querySelectorAll(`[${attr}]`)].filter(e => e.getAttribute(attr) === value).length;
+    };
+    const sameText = (selector, length) => {
+      const own = el.textContent?.trim().slice(0, length);
+      return [...document.querySelectorAll(selector)].filter(e => e.textContent?.trim().slice(0, length) === own).length;
+    };
+    // The value sits inside '...' in the generated code, and inside "..." in an attribute selector.
+    const quote = (value) => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const attrLocator = (attr) => `locator('[${attr}="${quote(el.getAttribute(attr)).replace(/"/g, '\\\\"')}"]')`;
+
+    if (el.getAttribute('data-testid')) locators.push({ strategy: 'data-testid', locator: attrLocator('data-testid'), score: 100, matches: sameAttr('data-testid') });
+    if (el.getAttribute('data-test')) locators.push({ strategy: 'data-test', locator: attrLocator('data-test'), score: 95, matches: sameAttr('data-test') });
+    if (el.getAttribute('aria-label')) locators.push({ strategy: 'aria-label', locator: `getByLabel('${quote(el.getAttribute('aria-label'))}')`, score: 85, matches: sameAttr('aria-label') });
+    if (el.getAttribute('placeholder')) locators.push({ strategy: 'placeholder', locator: `getByPlaceholder('${quote(el.getAttribute('placeholder'))}')`, score: 70, matches: sameAttr('placeholder') });
     if (el.getAttribute('role')) {
+      const role = el.getAttribute('role');
       const name = el.textContent?.trim().slice(0, 50);
-      locators.push({ strategy: 'role', locator: name ? `getByRole('${el.getAttribute('role')}', { name: '${name}' })` : `getByRole('${el.getAttribute('role')}')`, score: 90 });
+      locators.push({ strategy: 'role', locator: name ? `getByRole('${quote(role)}', { name: '${quote(name)}' })` : `getByRole('${quote(role)}')`, score: 90, matches: name ? sameText(`[role="${role}"]`, 50) : sameAttr('role') });
     }
-    if (el.id) locators.push({ strategy: 'id', locator: `locator('#${el.id}')`, score: 55 });
-    if (el.getAttribute('name')) locators.push({ strategy: 'name', locator: `locator('[name="${el.getAttribute('name')}"]')`, score: 45 });
+    if (el.id) {
+      // An id with characters that mean something in a selector is matched as an attribute.
+      const simple = /^[A-Za-z][\w-]*$/.test(el.id);
+      locators.push({ strategy: 'id', locator: simple ? `locator('#${el.id}')` : attrLocator('id'), score: 55, matches: sameAttr('id') });
+    }
+    if (el.getAttribute('name')) locators.push({ strategy: 'name', locator: attrLocator('name'), score: 45, matches: sameAttr('name') });
     const text = el.textContent?.trim().slice(0, 50);
-    if (text && ['BUTTON','A','LABEL'].includes(el.tagName)) locators.push({ strategy: 'text', locator: `getByText('${text}')`, score: 60 });
+    if (text && ['BUTTON','A','LABEL'].includes(el.tagName)) locators.push({ strategy: 'text', locator: `getByText('${quote(text)}')`, score: 60, matches: sameText('button, a, label, span, div, p, li, h1, h2, h3, h4', 50) });
 
     return {
       tag: el.tagName,
@@ -86,7 +106,8 @@
       dataTestId: el.getAttribute('data-testid'),
       html: el.outerHTML.slice(0, 500),
       rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
-      locators: locators.sort((a, b) => b.score - a.score)
+      // A locator that matches one element comes before any that matches several.
+      locators: locators.sort((a, b) => (a.matches === 1 ? 0 : 1) - (b.matches === 1 ? 0 : 1) || b.score - a.score)
     };
   }
 

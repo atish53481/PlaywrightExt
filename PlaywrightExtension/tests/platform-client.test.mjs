@@ -54,10 +54,29 @@ describe('platform client', () => {
     assert.equal(saved.token, '');
   });
 
+  it('stores nothing when the address answers 200 but not as the platform does', async () => {
+    for (const answer of [{}, { ok: true }, { token: 'x' }, { token: '', user: USER }, { token: 5, user: USER }]) {
+      responder = () => json(200, answer);
+      await assert.rejects(client.login('http://localhost:3000', 'a@b.co', 'x'), /did not answer like the Playwright Platform/);
+    }
+    assert.equal(saved.token, '');
+  });
+
   it('rejects a URL that is not http or https before any request', async () => {
     await assert.rejects(client.login('localhost:3000', 'a@b.co', 'x'), /must start with http/);
     await assert.rejects(client.login('javascript:alert(1)', 'a@b.co', 'x'), /must start with http/);
     assert.equal(calls.length, 0);
+  });
+
+  it('refuses plain http for a host that is not this machine, before any request', async () => {
+    await assert.rejects(client.login('http://platform.example.com', 'a@b.co', 'x'), /https/);
+    await assert.rejects(client.login('http://192.168.1.20:3000', 'a@b.co', 'x'), /https/);
+    assert.equal(calls.length, 0);
+
+    responder = () => json(200, { user: USER, token: 't', expiresAt: '2030-01-01T00:00:00.000Z' });
+    await client.login('http://127.0.0.1:3000', 'a@b.co', 'x');
+    await client.login('https://platform.example.com', 'a@b.co', 'x');
+    assert.equal(calls.length, 2);
   });
 
   it('explains an unreachable platform', async () => {

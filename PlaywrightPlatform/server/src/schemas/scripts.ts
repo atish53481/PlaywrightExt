@@ -29,7 +29,8 @@ const tag = z
   .trim()
   .min(1, 'A tag cannot be empty.')
   .max(40, 'A tag is too long (40 max).')
-  .regex(/^[\p{L}\p{N} _.@-]+$/u, 'A tag may contain letters, digits, spaces, and - _ . @ only.');
+  // \p{M}: the vowel signs and accents that Devanagari, Thai, and decomposed Latin letters are written with.
+  .regex(/^[\p{L}\p{M}\p{N} _.@-]+$/u, 'A tag may contain letters, digits, spaces, and - _ . @ only.');
 
 // Repeats that differ only by case collapse to the first spelling, and only then is the count checked.
 const tags = z
@@ -74,6 +75,11 @@ export const createScriptBody = z.object({
   // RESTORED and HEALED are written only by the server.
   source: z.enum(['MANUAL', 'GENERATED', 'RECORDED', 'IMPORTED']).default('MANUAL'),
   changeSummary: changeSummary.default(''),
+  /** The skill versions the script was generated with. */
+  skills: z
+    .array(z.object({ id: z.number().int().positive(), version: z.number().int().min(1).max(2_147_483_647) }))
+    .max(50, 'Too many skills (50 at most).')
+    .default([]),
 });
 
 const scriptListItemDto = z.object({
@@ -154,6 +160,13 @@ export const updateScriptBody = z
     content: content.optional(),
     changeSummary: changeSummary.optional(),
     baseVersion: z.number().int().min(1).max(2_147_483_647).optional(),
+    /** The new content is a fix from the Healer that a person reviewed and accepted. */
+    healed: z.boolean().optional(),
+    /** The skill versions the new content was made with. */
+    skills: z
+      .array(z.object({ id: z.number().int().positive(), version: z.number().int().min(1).max(2_147_483_647) }))
+      .max(50, 'Too many skills (50 at most).')
+      .optional(),
   })
   .refine((body) => CHANGEABLE.some((key) => body[key] !== undefined), {
     message: 'Provide at least one field to change.',

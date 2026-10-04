@@ -17,12 +17,14 @@ import { healthRoutes } from './routes/health';
 import { jenkinsRoutes } from './routes/jenkins';
 import { projectRoutes } from './routes/projects';
 import { scriptRoutes } from './routes/scripts';
+import { skillRoutes } from './routes/skills';
 import { userRoutes } from './routes/users';
 import { AuditService } from './services/audit-service';
 import { AuthService } from './services/auth-service';
 import { ExecutionService } from './services/execution-service';
 import { JenkinsService } from './services/jenkins-service';
 import { ProjectService } from './services/project-service';
+import { SkillService } from './services/skill-service';
 import { ScriptService } from './services/script-service';
 import { UserService } from './services/user-service';
 
@@ -90,6 +92,7 @@ export async function buildApp({ config, db, webRoot, now = Date.now }: AppDeps)
     app.log,
     config.playwrightDockerImage,
   );
+  const skillService = new SkillService(repos.skills, repos.projects, audit, transact, app.log);
   const executionService = new ExecutionService(
     repos.executions,
     repos.scripts,
@@ -112,9 +115,10 @@ export async function buildApp({ config, db, webRoot, now = Date.now }: AppDeps)
       await api.register(authRoutes, { auth, config });
       await api.register(userRoutes, { users: userService });
       await api.register(projectRoutes, { projects: projectService });
-      await api.register(scriptRoutes, { scripts: scriptService });
+      await api.register(scriptRoutes, { scripts: scriptService, executions: executionService });
       await api.register(jenkinsRoutes, { jenkins: jenkinsService });
       await api.register(executionRoutes, { executions: executionService });
+      await api.register(skillRoutes, { skills: skillService });
     },
     { prefix: '/api' },
   );

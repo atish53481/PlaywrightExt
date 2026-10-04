@@ -26,6 +26,8 @@ export interface CreateScriptInput {
   tags: string[];
   source: 'MANUAL' | 'GENERATED' | 'RECORDED' | 'IMPORTED';
   changeSummary: string;
+  /** The skill versions the script was generated with. */
+  skills?: Array<{ id: number; version: number }>;
 }
 
 export interface UpdateScriptInput {
@@ -37,6 +39,10 @@ export interface UpdateScriptInput {
   changeSummary?: string;
   /** The version the caller's content was based on. Required with `content`. */
   baseVersion?: number;
+  /** The new content is an accepted Healer fix. */
+  healed?: boolean;
+  /** The skill versions the new content was made with. */
+  skills?: Array<{ id: number; version: number }>;
 }
 
 const METADATA_FIELDS = ['name', 'description', 'testScenario', 'tags'] as const;
@@ -127,6 +133,7 @@ export class ScriptService {
           createdBy: actor.userId,
         });
         await r.tags.setForScript(id, input.tags);
+        await r.skills.recordForScript(id, 1, input.skills ?? []);
         await this.record(
           actor,
           'script.create',
@@ -185,9 +192,10 @@ export class ScriptService {
             version: next.version,
             content: next.content,
             changeSummary: input.changeSummary ?? '',
-            source: 'MANUAL',
+            source: input.healed ? 'HEALED' : 'MANUAL',
             createdBy: actor.userId,
           });
+          await r.skills.recordForScript(id, next.version, input.skills ?? []);
         }
         if (input.tags !== undefined) await r.tags.setForScript(id, input.tags);
         await this.record(

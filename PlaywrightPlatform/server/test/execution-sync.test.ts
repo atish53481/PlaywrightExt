@@ -101,9 +101,37 @@ describe('executions: sync with Jenkins', () => {
     expect(project.json().overview).toMatchObject({ passedScripts: 1, notExecuted: 0 });
   });
 
-  it('UNSTABLE is FAILED and marks the script', async () => {
-    expect((await endWith('UNSTABLE')).status).toBe('FAILED');
+  it('answers with the stored run when the saved Jenkins token can no longer be read', async () => {
+    const { id } = await startRun(world, stub);
+    // As after SECRETS_ENCRYPTION_KEY was changed.
+    await world.ctx.db('jenkins_configurations').update({ secret_ciphertext: 'not-a-ciphertext' });
+    const res = await poll(world, id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().execution.status).toBe('QUEUED');
+  });
+
+  it('UNSTABLE is FAILED when the build reported tests, and marks the script', async () => {
+    const reported = (id: number) =>
+      world.ctx.db('test_executions').where({ id }).update({ total_tests: 2, passed_tests: 1, failed_tests: 1 });
+    expect((await endWith('UNSTABLE', reported)).status).toBe('FAILED');
     expect(await scriptState()).toBe('FAILED');
+  });
+
+  it('UNSTABLE with no tests reported is ERROR, with the reason the build gave when there is one', async () => {
+    expect(await endWith('UNSTABLE')).toMatchObject({
+      status: 'ERROR',
+      errorMessage: 'No tests ran: the script could not be loaded, or has no tests. Open the Jenkins build for the log.',
+    });
+    // An ERROR says nothing about the script.
+    expect(await scriptState()).toBe('SAVED');
+
+    // A script that does not compile: Playwright reports the reason, and no tests.
+    const explained = (id: number) =>
+      world.ctx.db('test_executions').where({ id }).update({ error_message: 'SyntaxError: Unexpected token' });
+    expect(await endWith('UNSTABLE', explained)).toMatchObject({
+      status: 'ERROR',
+      errorMessage: 'SyntaxError: Unexpected token',
+    });
   });
 
   it('FAILURE is FAILED when the build reported tests, and ERROR when it did not', async () => {

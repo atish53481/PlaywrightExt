@@ -31,7 +31,8 @@ const PLAYWRIGHT_CONFIG = `import { defineConfig, devices } from '@playwright/te
 export default defineConfig({
   testDir: 'tests',
   reporter: [['html', { open: 'never' }], ['json', { outputFile: 'results.json' }]],
-  use: { headless: true },
+  // What a failed test leaves behind for the person reading the report.
+  use: { headless: true, screenshot: 'only-on-failure', video: 'retain-on-failure', trace: 'retain-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 });
 `;
@@ -40,6 +41,7 @@ export default defineConfig({
 // to result-body.json, which the agent then posts to the platform. Writes nothing when there
 // is no report (the tests never started); the platform then reports that.
 const REPORT_SCRIPT = `const fs = require('node:fs');
+const nodePath = require('node:path');
 
 function firstError(suites) {
   for (const suite of suites || []) {
@@ -56,7 +58,41 @@ function firstError(suites) {
   return null;
 }
 
-const plain = (text) => text.replace(/\\u001b\\[[0-9;]*m/g, '').slice(0, 2000);
+function plain(text) {
+  return String(text).replace(/\\u001b\\[[0-9;]*m/g, '').slice(0, 2000);
+}
+
+// One entry per test, named by its describe blocks and title.
+function collectTests(suites, path, out) {
+  for (const suite of suites || []) {
+    // The top suite is the file; its name says nothing about the test.
+    const here = suite.file === suite.title || !suite.title ? path : path.concat(suite.title);
+    for (const spec of suite.specs || []) {
+      for (const test of spec.tests || []) {
+        if (out.length >= 500) return;
+        const results = test.results || [];
+        const last = results[results.length - 1] || {};
+        const status = test.status === 'skipped' ? 'SKIPPED' : test.status === 'unexpected' ? 'FAILED' : 'PASSED';
+        const entry = {
+          name: here.concat(spec.title).join(' > ').slice(0, 500) || 'test',
+          status,
+          durationMs: Math.max(0, Math.round(results.reduce((sum, r) => sum + (r.duration || 0), 0))),
+        };
+        if (status === 'FAILED' && last.error && last.error.message) entry.errorMessage = plain(last.error.message);
+        // The files Playwright kept for the test, as paths inside this workspace.
+        for (const kind of ['screenshot', 'video', 'trace']) {
+          const file = (last.attachments || []).find((a) => a.name === kind && a.path);
+          if (!file) continue;
+          const relative = nodePath.relative(process.cwd(), file.path).split(nodePath.sep).join('/');
+          if (!relative.startsWith('..')) entry[kind] = relative;
+        }
+        out.push(entry);
+      }
+    }
+    collectTests(suite.suites, here, out);
+  }
+  return out;
+}
 
 function main() {
   if (!fs.existsSync('results.json')) return;
@@ -65,8 +101,10 @@ function main() {
   const passed = (stats.expected || 0) + (stats.flaky || 0);
   const failed = stats.unexpected || 0;
   const skipped = stats.skipped || 0;
-  const body = { total: passed + failed + skipped, passed, failed, skipped };
-  const message = firstError(report.suites);
+  const body = { total: passed + failed + skipped, passed, failed, skipped, tests: collectTests(report.suites, [], []) };
+  // A script that does not compile has no failed test: the reason is in the report's own errors.
+  const loadError = (report.errors || [])[0];
+  const message = firstError(report.suites) || (loadError && loadError.message);
   if (message) body.errorMessage = plain(message);
   fs.writeFileSync('result-body.json', JSON.stringify(body));
   console.log('Wrote the result for the platform: ' + body.total + ' tests');
@@ -178,7 +216,7 @@ pipeline {
           }
         }
       }
-      archiveArtifacts artifacts: 'playwright-report/**', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'playwright-report/**, test-results/**', allowEmptyArchive: true
     }
   }
 }

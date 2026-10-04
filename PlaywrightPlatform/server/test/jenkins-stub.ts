@@ -27,6 +27,8 @@ export interface JenkinsStub {
   queue: Map<number, { cancelled: boolean; buildNumber: number | null }>;
   /** `${job}/${number}` → build. */
   builds: Map<string, StubBuild>;
+  /** `${job}/${number}/${path}` → an archived file of that build. */
+  artifacts: Map<string, { contentType: string; body: Buffer }>;
   plugins: string[];
   /** When true the plugin list answers 403, as Jenkins does for a user who may not view plugins. */
   forbidPluginList: boolean;
@@ -44,6 +46,9 @@ export interface JenkinsStub {
   holdNext(): { arrived: Promise<void>; release: () => void };
   close(): Promise<void>;
 }
+
+/** What a Jenkins that can run the platform's job has installed. */
+const PIPELINE_PLUGINS = ['workflow-job', 'workflow-cps', 'pipeline-model-definition'];
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -65,7 +70,8 @@ export async function startJenkinsStub(): Promise<JenkinsStub> {
     configs: new Map(),
     queue: new Map(),
     builds: new Map(),
-    plugins: ['workflow-aggregator'],
+    artifacts: new Map(),
+    plugins: [...PIPELINE_PLUGINS],
     forbidPluginList: false,
     requests: [],
     failWith: null,
@@ -75,7 +81,8 @@ export async function startJenkinsStub(): Promise<JenkinsStub> {
       stub.configs.clear();
       stub.queue.clear();
       stub.builds.clear();
-      stub.plugins = ['workflow-aggregator'];
+      stub.artifacts.clear();
+      stub.plugins = [...PIPELINE_PLUGINS];
       stub.forbidPluginList = false;
       stub.requests.length = 0;
       stub.failWith = null;
@@ -156,10 +163,22 @@ export async function startJenkinsStub(): Promise<JenkinsStub> {
         stub.queue.set(id, { cancelled: false, buildNumber: null });
         return send(201, undefined, { Location: `${stub.url}/queue/item/${id}/` });
       }
-      const buildMatch = /^(\d+)\/(api\/json|stop)$/.exec(rest);
+      const artifactMatch = /^(\d+)\/artifact\/(.+)$/.exec(rest);
+      if (req.method === 'GET' && artifactMatch) {
+        const file = stub.artifacts.get(`${job}/${artifactMatch[1]}/${decodeURIComponent(artifactMatch[2])}`);
+        if (!file) return send(404);
+        res.writeHead(200, { 'Content-Type': file.contentType, 'Content-Length': String(file.body.length) });
+        res.end(file.body);
+        return;
+      }
+      const buildMatch = /^(\d+)\/(api\/json|stop|doDelete)$/.exec(rest);
       if (buildMatch) {
         const build = stub.builds.get(`${job}/${buildMatch[1]}`);
         if (!build) return send(404);
+        if (req.method === 'POST' && buildMatch[2] === 'doDelete') {
+          stub.builds.delete(`${job}/${buildMatch[1]}`);
+          return send(302, undefined, { Location: `${stub.url}/job/${job}/` });
+        }
         if (req.method === 'GET' && buildMatch[2] === 'api/json') return send(200, build);
         if (req.method === 'POST' && buildMatch[2] === 'stop') {
           build.building = false;

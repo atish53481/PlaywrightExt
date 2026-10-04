@@ -62,6 +62,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// The platform session token is kept in chrome.storage.local. Content scripts run inside
+// web pages and have no use for it, so storage is closed to them.
+chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' });
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[Playwright AI Studio] Installed v1.0.0');
 });
