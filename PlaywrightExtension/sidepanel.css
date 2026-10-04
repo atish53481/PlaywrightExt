@@ -243,6 +243,23 @@ select option { background: var(--bg3); }
 .pick-row .item { flex: 1; min-width: 0; }
 .pick-row input, .pick-all input { width: 16px; height: 16px; flex: none; accent-color: var(--accent); cursor: pointer; }
 .pick-all { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
+.batch-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+#scripts-batch-summary { font-size: 12px; color: var(--text2); }
+.run-row {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.manage-form .run-row { background: var(--bg); }
+.run-row.selected { border-color: var(--accent); }
+.run-row-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; text-align: left;
+  background: none; border: 0; color: var(--text); font-family: var(--font); cursor: pointer;
+}
+.run-row-head:hover .item-title { text-decoration: underline; }
+.run-row-head:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
+.run-row .run-status { flex: none; }
+.run-row-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.run-row-links a { font-size: 11px; padding: 2px 8px; }
 .record-options {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 10px; font-size: 12px;
   background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);

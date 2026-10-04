@@ -399,3 +399,29 @@ describe('platform client: what a run records', () => {
     for (const call of calls) assert.equal(call.url, 'http://localhost:3000/api/scripts/3/run');
   });
 });
+
+describe('platform client: one report for several runs', () => {
+  it('asks for the page of the given runs and returns its path', async () => {
+    const calls = [];
+    const client = createPlatformClient({
+      fetchFn: async (url, init) => {
+        calls.push({ url, init });
+        return json(200, { url: '/api/batch-reports/b12-13.1790000000.sig/' });
+      },
+      storage: {
+        getPlatform: async () => ({ url: 'http://localhost:3000', token: 'tok-1', user: USER }),
+        savePlatform: async () => undefined,
+      },
+    });
+
+    assert.equal(await client.getBatchReportPath([12, 13]), '/api/batch-reports/b12-13.1790000000.sig/');
+    assert.equal(calls[0].url, 'http://localhost:3000/api/executions/batch-report');
+    assert.deepEqual(JSON.parse(calls[0].init.body), { ids: [12, 13] });
+    assert.equal(await client.platformUrl(), 'http://localhost:3000');
+
+    for (const bad of [[], null, [0], [1, '2'], [1.5]]) {
+      await assert.rejects(() => client.getBatchReportPath(bad), /Choose a run/);
+    }
+    assert.equal(calls.length, 1);
+  });
+});

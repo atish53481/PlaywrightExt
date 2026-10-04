@@ -106,6 +106,49 @@ export function reportLinks(reports, platformUrl) {
   return links;
 }
 
+// The address of a page the platform serves for a run or for several runs, or null. `path`
+// must have the shape the platform makes for that kind of page, and the link stays under
+// the platform's own address.
+function platformPage(path, platformUrl, shape) {
+  const base = String(platformUrl || '').replace(/\/+$/, '');
+  if (!/^https?:\/\/[^/]+/i.test(base)) return null;
+  if (typeof path !== 'string' || !shape.test(path)) return null;
+  return base + path;
+}
+
+// Where a finished run's own report page opens (the run's `runReportUrl`), or null.
+export function runReportLink(execution, platformUrl) {
+  return platformPage(execution?.runReportUrl, platformUrl, /^\/api\/reports\/[A-Za-z0-9._-]+\/$/);
+}
+
+// Where the page for scripts run together opens, or null.
+export function batchReportLink(path, platformUrl) {
+  return platformPage(path, platformUrl, /^\/api\/batch-reports\/b[A-Za-z0-9._-]+\/$/);
+}
+
+// One run as a row of a list: { label, className, detail, links: [{ label, href }] }.
+// `entry` is { execution, error }: the run, or why it could not be started. Used for the
+// run history of a script and for scripts run together.
+export function runRow(entry, { platformUrl = '', jenkinsBaseUrl = '', withVersion = false, withId = true, when = '' } = {}) {
+  const run = entry?.execution;
+  if (!run) {
+    return entry?.error
+      ? { label: 'Not started', className: 'run-status run-off', detail: String(entry.error), links: [] }
+      : { label: 'Starting', className: 'run-status run-wait', detail: 'Asking Jenkins to start the run…', links: [] };
+  }
+  const status = statusView(run.status);
+  const parts = withId ? [`#${run.id}`] : [];
+  if (withVersion) parts.push(`v${run.scriptVersion}`);
+  if (run.buildNumber) parts.push(`build ${run.buildNumber}`);
+  parts.push(countsText(run) || (isFinal(run.status) ? 'no test ran' : ''), durationText(run.durationMs), when);
+  const links = [];
+  const report = runReportLink(run, platformUrl);
+  if (report) links.push({ label: 'Run report', href: report });
+  const build = safeJenkinsLink(run.buildUrl, jenkinsBaseUrl);
+  if (build) links.push({ label: 'Jenkins', href: build });
+  return { label: status.label, className: status.className, detail: parts.filter(Boolean).join(' · '), links };
+}
+
 // One line for scripts run together: "4 scripts: 1 running, 2 passed, 1 not started".
 // `entries` is [{ execution, error }]: the run of each script, or why it could not start.
 export function batchSummary(entries) {

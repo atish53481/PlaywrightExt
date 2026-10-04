@@ -587,7 +587,12 @@
               <span class="record-note">A failed test keeps both, whatever is ticked.</span>
             </div>
             <div class="manage-form" id="scripts-batch" style="display:none">
+              <div class="batch-head">
+                <strong>▶ Scripts run together on Jenkins</strong>
+                <button class="btn btn-icon" id="scripts-batch-close" title="Hide this list" aria-label="Hide this list">✕</button>
+              </div>
               <div id="scripts-batch-summary" role="status"></div>
+              <div class="btn-row" id="scripts-batch-links"></div>
               <div class="item-list" id="scripts-batch-list"></div>
             </div>
             <div class="item-list" id="scripts-list"></div>
@@ -698,7 +703,7 @@
               <div class="btn-row"><button class="btn btn-secondary btn-sm" id="run-heal" style="display:none">🔧 Send to Healer</button></div>
             </div>
             <div class="output-section">
-              <div class="output-header"><span>Recent runs</span></div>
+              <div class="output-header"><span>Run history on Jenkins</span></div>
               <div class="item-list" id="run-history"></div>
             </div>
             <div class="output-section">

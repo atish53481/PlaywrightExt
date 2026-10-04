@@ -8,8 +8,8 @@ import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
 import { PlatformClient } from './utils/platform-client.js';
 import {
-  batchSummary, countsText, deleteControls, durationText, isFinal, manageControls, reportLinks, resultRows, runControls,
-  runLinks, runSummary, statusView,
+  batchReportLink, batchSummary, countsText, deleteControls, durationText, isFinal, manageControls, reportLinks,
+  resultRows, runControls, runLinks, runRow, statusView,
 } from './utils/execution-view.js';
 import { extractCode, looksLikeCode, pickFixedCode, sectionAfter, toSingleFile } from './utils/code-extract.js';
 import { diffStats, lineDiff } from './utils/line-diff.js';
@@ -1281,6 +1281,8 @@ function setupProjectsPanel() {
   const batchPanel = $('scripts-batch');
   const batchSummaryEl = $('scripts-batch-summary');
   const batchList = $('scripts-batch-list');
+  const batchLinks = $('scripts-batch-links');
+  const batchClose = $('scripts-batch-close');
   const recordInScript = $('script-record');
   const recordInList = $('scripts-record');
   const required = [
@@ -1290,6 +1292,7 @@ function setupProjectsPanel() {
     newProjectBtn, newProjectForm, newProjectName, renameBtn, renameForm, renameName, projectDeleteBtn,
     projectDeleteConfirm, projectDeleteText, editBtn, editForm, editName, editContent, editSummary,
     batchBar, selectAll, runSelected, batchPanel, batchSummaryEl, batchList, recordInScript, recordInList,
+    batchLinks, batchClose,
   ];
   if (required.some((el) => !el)) return;
 
@@ -1316,6 +1319,8 @@ function setupProjectsPanel() {
     batch: [],             // the scripts started together: [{ id, name, execution, error }]
     batchProjectId: null,  // the project that batch belongs to
     batchStarting: false,  // true while the batch's runs are being started
+    batchReportPath: '',   // where the page for all runs of the batch opens, as the server gave it
+    platformUrl: '',       // the platform the panel is signed in to: report links are made under it
     batchTimer: null,
   };
 
@@ -1407,17 +1412,64 @@ function setupProjectsPanel() {
     runSelected.textContent = chosen === 0 ? '▶ Run selected on Jenkins' : `▶ Run ${chosen} selected on Jenkins`;
   }
 
-  // The scripts started together: one line each, opening the script and its run.
+  // One run as a row: its status, a title that opens it, a line of detail, and its links.
+  // Built with DOM methods and textContent: every text here comes from the server.
+  function runRowEl(title, entry, options, onOpen, selected = false) {
+    const view = runRow(entry, { platformUrl: state.platformUrl, jenkinsBaseUrl: state.jenkins?.baseUrl || '', ...options });
+    const row = document.createElement('div');
+    row.className = selected ? 'run-row selected' : 'run-row';
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'run-row-head';
+    const badge = document.createElement('span');
+    badge.className = view.className;
+    badge.textContent = view.label;
+    const name = document.createElement('span');
+    name.className = 'item-title';
+    name.textContent = title;
+    head.append(badge, name);
+    head.addEventListener('click', onOpen);
+    const detail = document.createElement('div');
+    detail.className = 'item-sub';
+    detail.textContent = view.detail;
+    row.append(head, detail);
+    if (view.links.length > 0) {
+      const links = document.createElement('div');
+      links.className = 'run-row-links';
+      links.append(...view.links.map(({ label, href }) => {
+        const link = document.createElement('a');
+        link.className = 'btn btn-secondary btn-sm';
+        link.textContent = label;
+        link.href = href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        return link;
+      }));
+      row.append(links);
+    }
+    return row;
+  }
+
+  // The scripts started together: how many ended how, one page for all of them, and one row
+  // each with its status and its own report.
   function renderBatch() {
     show(batchPanel, state.batch.length > 0);
-    batchSummaryEl.textContent = batchSummary(state.batch);
-    batchList.replaceChildren(...state.batch.map((entry) => {
-      const run = entry.execution;
-      const detail = run
-        ? [statusView(run.status).label, countsText(run), durationText(run.durationMs)].filter(Boolean).join(' · ')
-        : entry.error ? `Not started: ${entry.error}` : 'Starting…';
-      return item(entry.name, detail, () => openScript(entry.id));
-    }));
+    const done = state.batch.filter((entry) => entry.error || (entry.execution && isFinal(entry.execution.status))).length;
+    const progress = state.batch.length > 0 && done < state.batch.length ? ` — ${done} of ${state.batch.length} finished` : '';
+    batchSummaryEl.textContent = batchSummary(state.batch) + progress;
+    const href = batchReportLink(state.batchReportPath, state.platformUrl);
+    if (href) {
+      const link = document.createElement('a');
+      link.className = 'btn btn-primary btn-sm';
+      link.textContent = '📊 Report for all of them';
+      link.href = href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      batchLinks.replaceChildren(link);
+    } else {
+      batchLinks.replaceChildren();
+    }
+    batchList.replaceChildren(...state.batch.map((entry) => runRowEl(entry.name, entry, {}, () => openScript(entry.id))));
   }
 
   // Asks again every 3 seconds while a script of the batch is unfinished.
@@ -1441,6 +1493,13 @@ function setupProjectsPanel() {
     }, POLL_MS);
   }
 
+  batchClose.addEventListener('click', () => {
+    clearTimeout(state.batchTimer);
+    state.batch = [];
+    state.batchReportPath = '';
+    renderBatch();
+  });
+
   selectAll.addEventListener('change', () => {
     state.selected = new Set(selectAll.checked ? state.listed.map((script) => script.id) : []);
     for (const box of scriptList.querySelectorAll('input[type="checkbox"]')) box.checked = selectAll.checked;
@@ -1454,6 +1513,7 @@ function setupProjectsPanel() {
     clearTimeout(state.batchTimer);
     state.batchProjectId = state.project.id;
     state.batch = chosen.map((script) => ({ id: script.id, name: script.name, execution: null, error: '' }));
+    state.batchReportPath = '';
     state.batchStarting = true;
     renderBatchBar();
     renderBatch();
@@ -1469,6 +1529,17 @@ function setupProjectsPanel() {
     }
     state.batchStarting = false;
     if (turn !== state.turn) return;
+    // One page for all the runs that started. Without it each row still has its own report.
+    const started = state.batch.filter((entry) => entry.execution).map((entry) => entry.execution.id);
+    if (started.length > 0) {
+      try {
+        state.batchReportPath = await PlatformClient.getBatchReportPath(started);
+      } catch {
+        state.batchReportPath = '';
+      }
+      if (turn !== state.turn) return;
+      renderBatch();
+    }
     state.selected = new Set();
     for (const box of scriptList.querySelectorAll('input[type="checkbox"]')) box.checked = false;
     renderBatchBar();
@@ -1633,11 +1704,16 @@ function setupProjectsPanel() {
       runHistory.replaceChildren(emptyLine('No runs yet.'));
       return;
     }
-    runHistory.replaceChildren(...state.runs.map((execution) => {
-      const row = item(runSummary(execution), new Date(execution.createdAt).toLocaleString(), () => selectRun(execution.id));
-      if (state.execution?.id === execution.id) row.classList.add('selected');
-      return row;
-    }));
+    // Every earlier run with how it ended and its own report, so the history can be read
+    // without opening each run. The title opens the run in the card above.
+    runHistory.replaceChildren(...state.runs.map((execution) => runRowEl(
+      `Run #${execution.id}`,
+      { execution },
+      // The title already says which run it is.
+      { withVersion: true, withId: false, when: new Date(execution.createdAt).toLocaleString() },
+      () => selectRun(execution.id),
+      state.execution?.id === execution.id,
+    )));
   }
 
   // Shows a run in the status card, or hides the card when there is none.
@@ -1743,6 +1819,7 @@ function setupProjectsPanel() {
     renderManage();
     say('Loading…');
     try {
+      state.platformUrl = await PlatformClient.platformUrl();
       const projects = await PlatformClient.listProjects();
       if (turn !== state.turn) return;
       const none = state.user.role === 'ADMIN'

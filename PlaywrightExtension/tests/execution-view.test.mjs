@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  batchReportLink,
   batchSummary,
   countsText,
   durationText,
@@ -9,6 +10,8 @@ import {
   reportLinks,
   runControls,
   runLinks,
+  runReportLink,
+  runRow,
   runSummary,
   safeJenkinsLink,
   statusView,
@@ -223,5 +226,61 @@ describe('execution view', () => {
       showStop: false,
       note: '',
     });
+  });
+});
+
+describe('runs as rows: history and scripts run together', () => {
+  const platform = 'http://localhost:3000';
+  const run = {
+    id: 52, scriptVersion: 2, status: 'FAILED', buildNumber: 61, total: 3, passed: 2, failed: 1, skipped: 0, durationMs: 14_000,
+    buildUrl: 'http://localhost:7070/job/run/61/',
+    runReportUrl: '/api/reports/52.1790000000.abc-DEF_123/',
+  };
+
+  it('shows a finished run with its status, what happened, and its links', () => {
+    assert.deepEqual(runRow({ execution: run }, { platformUrl: platform, withVersion: true, when: '4 Oct, 18:56' }), {
+      label: 'Failed',
+      className: 'run-status run-bad',
+      detail: '#52 · v2 · build 61 · 3 tests: 2 passed, 1 failed · 14s · 4 Oct, 18:56',
+      links: [
+        { label: 'Run report', href: `${platform}${run.runReportUrl}` },
+        { label: 'Jenkins', href: run.buildUrl },
+      ],
+    });
+  });
+
+  it('shows a run that is starting, running, or could not be started', () => {
+    assert.deepEqual(runRow({ execution: null, error: '' }), {
+      label: 'Starting', className: 'run-status run-wait', detail: 'Asking Jenkins to start the run…', links: [],
+    });
+    assert.deepEqual(runRow({ execution: null, error: 'This script is already running.' }), {
+      label: 'Not started', className: 'run-status run-off', detail: 'This script is already running.', links: [],
+    });
+    const running = { id: 7, scriptVersion: 1, status: 'RUNNING', buildNumber: null, total: 0, durationMs: null, buildUrl: null, runReportUrl: null };
+    assert.deepEqual(runRow({ execution: running }, { platformUrl: platform }), {
+      label: 'Running', className: 'run-status run-run', detail: '#7', links: [],
+    });
+    const error = { ...running, status: 'ERROR' };
+    assert.equal(runRow({ execution: error }, { platformUrl: platform }).detail, '#7 · no test ran');
+    // A list whose title names the run leaves the number out of the detail.
+    assert.equal(runRow({ execution: run }, { withVersion: true, withId: false }).detail, 'v2 · build 61 · 3 tests: 2 passed, 1 failed · 14s');
+  });
+
+  it('links a report page only when it has the shape the platform makes, under the platform address', () => {
+    assert.equal(runReportLink(run, platform), `${platform}${run.runReportUrl}`);
+    assert.equal(runReportLink(run, `${platform}/`), `${platform}${run.runReportUrl}`);
+    for (const bad of ['javascript:alert(1)', '//evil.example/api/reports/x/', '/api/reports/x/../../auth/logout', '/api/reports/x', null, 7]) {
+      assert.equal(runReportLink({ runReportUrl: bad }, platform), null);
+    }
+    assert.equal(runReportLink(run, ''), null);
+    assert.equal(runReportLink(null, platform), null);
+    // A report link that is not trusted leaves the row without it; the Jenkins link is judged on its own.
+    assert.deepEqual(runRow({ execution: { ...run, runReportUrl: 'javascript:alert(1)', buildUrl: 'javascript:alert(2)' } }, { platformUrl: platform }).links, []);
+
+    const batch = '/api/batch-reports/b52-53.1790000000.abc-DEF_123/';
+    assert.equal(batchReportLink(batch, platform), platform + batch);
+    for (const bad of ['/api/reports/52.1.x/', '/api/batch-reports/52.1.x/', '//evil.example/api/batch-reports/b1.1.x/', '', undefined]) {
+      assert.equal(batchReportLink(bad, platform), null);
+    }
   });
 });
