@@ -142,9 +142,17 @@ only to this server; the server talks to Jenkins.
 **What Jenkins needs**
 
 - The **Pipeline** plugin (`workflow-aggregator`). Test Connection reports whether it is there.
-- A **Windows** agent with **Node.js 18 or newer** on its PATH. The job uses `bat` steps.
-- Network access from the agent to this server, and to npm and the Playwright browser
-  download.
+- **Docker** on the machine that runs the builds: Docker Desktop on Windows (with Linux
+  containers), or Docker Engine on Linux. The tests run inside the official Playwright
+  image, started with `docker run`. One job serves Windows and Linux agents.
+- The account Jenkins runs as must be allowed to run `docker`. On Linux, add it to the
+  `docker` group and restart Jenkins. On Windows, Docker Desktop must be running, and the
+  drive that holds the Jenkins workspace must be shared with it (with the WSL 2 backend
+  every drive is shared).
+- **`curl`** on the agent. Windows 10 and later include it.
+- Network access from the agent to this server, to the image registry (`mcr.microsoft.com`),
+  and to npm.
+- Node.js is **not** needed on the agent, and no browser is downloaded: the image has both.
 - A Jenkins user and an **API token** for it: in Jenkins, open your user menu → **Security**
   (older versions: **Configure**) → **API Token** → **Add new Token**. The user needs
   permission to create jobs, build, and cancel builds.
@@ -155,6 +163,8 @@ only to this server; the server talks to Jenkins.
 2. Under **Jenkins** enter the Jenkins URL, the username, and the API token.
 3. Press **Test Connection**, then **Save**, then **Create Job**. This creates the pipeline
    job `playwright-platform-run` in Jenkins; pressing it again updates the job's definition.
+   A job created before the tests ran in Docker keeps its old definition until an ADMIN
+   presses **Create Job** again.
 
 **Run (ADMIN or USER)**
 
@@ -167,12 +177,30 @@ only to this server; the server talks to Jenkins.
 
 - Each run is a row in `test_executions` with the script version that was current when Run
   was pressed. One script can have one unfinished run at a time.
-- The build downloads that version from this server with a one-time run token, runs it with
-  Playwright on Chromium, and posts the test counts back. The token works only for that run
-  and only until the run ends.
+- The build has four stages. **Preflight** checks that Docker works and pulls the image if
+  the agent does not have it. **Prepare** downloads that script version from this server
+  with a one-time run token. **Install** and **Test** run `npm install` and
+  `npx playwright test` (Chromium) inside the image, with the workspace mounted at `/work`.
+  The agent then posts the test counts back. The token works only for that run and only
+  until the run ends.
+- Only the agent talks to this server. The container is given the workspace and an npm
+  cache, and never the run token or this server's address.
 - Status comes from Jenkins, and is read whenever someone looks at the run. A run nobody
   looks at keeps its last known status until it is opened, or until Run is pressed again.
 - A passed or failed run sets the script's state, which the project overview counts.
+
+**The Playwright image**
+
+`PLAYWRIGHT_DOCKER_IMAGE` in `.env` names the image, by default
+`mcr.microsoft.com/playwright:v1.63.0-noble`. The tag must name a Playwright version: the
+build installs exactly that version of `@playwright/test`, because any other version looks
+for browsers the image does not have. To change the image, edit `.env`, restart the server,
+and press **Create Job** again (the version is written into the job).
+
+The first build pulls the image, about 1 to 2 GB, and is slow. Run
+`docker pull mcr.microsoft.com/playwright:v1.63.0-noble` on the agent beforehand to avoid
+that. Later builds reuse the image and an npm cache kept in the Docker volume
+`playwright-npm-cache`, and take well under a minute before the tests start.
 
 **The address Jenkins calls back**
 
@@ -190,8 +218,7 @@ machine can reach, and put the server behind HTTPS.
 
 **Limits**
 
-Windows agents only; one script per run; Chromium only. Every build installs its packages
-and the browser afresh, so a run takes a few minutes. Per-test results, screenshots, and
+One script per run; Chromium only; the tests run headless. Per-test results, screenshots, and
 traces come with the reports release.
 
 ## Tests
@@ -266,6 +293,11 @@ All routes are under `/api`. Errors always look like
 | Run answers `JENKINS_REJECTED` | The username or API token is wrong, the Jenkins user lacks permission, or the job does not exist. Press Test Connection, then Create Job. |
 | Run answers `JENKINS_UNREACHABLE` | Jenkins is not running or the URL is wrong. Open the Jenkins URL in a browser. |
 | A run ends as ERROR "Jenkins did not start the build" | No agent took the build within 10 minutes. Check Build Executor Status in Jenkins. |
-| A run ends as ERROR "The build failed before the tests ran" | Open the build's console log. Usual causes: Node.js is not on the agent's PATH, the agent cannot reach `PLATFORM_PUBLIC_URL`, or the package or browser download is blocked. |
+| A run ends as ERROR "The build failed before the tests ran" | Open the build's console log. Usual causes: the agent cannot reach `PLATFORM_PUBLIC_URL`, `curl` is missing on the agent, `npm install` could not reach npm, or the job is older than the server (press **Create Job** again). |
+| A run ends as ERROR "Docker is not available on the Jenkins agent" | `docker version` failed for the account Jenkins runs as. Start Docker Desktop (Windows) or the Docker service (Linux), then run `docker version` as that account. |
+| A run ends as ERROR "Could not pull mcr.microsoft.com/playwright:…" | The agent cannot reach the registry (offline, or behind a proxy Docker does not know), or the image name is wrong. Run `docker pull <image>` on the agent; set the proxy in Docker's own settings. |
+| The console log says `permission denied` for `/var/run/docker.sock` | Linux: the Jenkins account is not in the `docker` group. Run `sudo usermod -aG docker jenkins` and restart Jenkins. |
+| The Install stage fails with `package.json` not found in `/work` | Windows: the drive holding the Jenkins workspace is not shared with Docker Desktop. Share it under Settings → Resources → File sharing, or use the WSL 2 backend. |
+| The Preflight stage fails to delete the workspace on Linux | Files there belong to root, left by a container that ran without the agent's user. Delete the workspace once with `sudo`; the job runs the container as the agent's user. |
 | A run stays RUNNING after the build ended | Nobody has looked at it since. Open the script in the Projects tab; the run is read again from Jenkins. |
 | Run or Test Connection answers `INTERNAL_ERROR` after `SECRETS_ENCRYPTION_KEY` changed | The stored Jenkins token can no longer be read. Enter the API token again under Settings → Jenkins and press Save. |
