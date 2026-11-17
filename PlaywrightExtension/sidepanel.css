@@ -150,6 +150,13 @@ select option { background: var(--bg3); }
 }
 .output-content::-webkit-scrollbar { width: 4px; }
 .output-content::-webkit-scrollbar-thumb { background: var(--border); }
+/* Line numbers (Recorder code box): one .code-line per line, counted by CSS. */
+.output-content.numbered { counter-reset: code-line; }
+.code-line { display: block; position: relative; padding-left: 38px; counter-increment: code-line; }
+.code-line::before {
+  content: counter(code-line); position: absolute; left: 0; width: 28px; text-align: right;
+  color: var(--text3); user-select: none;
+}
 .output-placeholder { color: var(--text3); font-style: italic; font-family: var(--font); }
 .output-content .md { font-family: var(--font); white-space: pre-wrap; }
 .output-content code { background: var(--bg3); padding: 1px 4px; border-radius: 3px; font-family: var(--mono); font-size: 11px; color: var(--accent); }
@@ -340,5 +347,60 @@ a.btn { text-decoration: none; }
   outline: 2px solid var(--accent2); outline-offset: 1px;
 }
 
+/* ---- RUN ON PAGE: steps and the debug bar ---- */
+/* A debug run: the bar and the picked locator stay put above the steps, and only the step list
+   scrolls. The results box itself stops scrolling (its inline max-height is overridden). */
+.output-content:has(> .dbg-head) { max-height: none !important; overflow: visible !important; }
+.dbg-steps { max-height: 260px; overflow-y: auto; }
+.dbg-steps::-webkit-scrollbar, .dbg-bar::-webkit-scrollbar, .dbg-pick code::-webkit-scrollbar { width: 4px; height: 4px; }
+.dbg-steps::-webkit-scrollbar-thumb, .dbg-bar::-webkit-scrollbar-thumb, .dbg-pick code::-webkit-scrollbar-thumb { background: var(--border); }
+/* One row; scrolls sideways when the panel is narrow instead of wrapping. */
+.dbg-head .dbg-bar { flex-wrap: nowrap; overflow-x: auto; }
+.dbg-head .dbg-bar .btn { flex-shrink: 0; white-space: nowrap; }
+/* The locator on one line, scrolled sideways. */
+.dbg-head .dbg-pick code { white-space: nowrap; overflow-x: auto; word-break: normal; }
+.dbg-head .dbg-pick .btn { flex-shrink: 0; white-space: nowrap; }
+.dbg-bar { display: flex; gap: 4px; flex-wrap: wrap; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+.dbg-bar .btn:disabled, .dbg-pick .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.dbg-bar .btn.on, #rec-tools .btn.on { background: var(--accent); color: #000; border-color: var(--accent); }
+.dbg-pick, .picked-locator { display: flex; gap: 6px; align-items: center; padding: 6px 8px; margin: 4px 0; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); }
+.dbg-pick[hidden] { display: none; }
+.dbg-pick code, .picked-locator code { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--accent); word-break: break-all; background: transparent; }
+.run-step { display: grid; grid-template-columns: 14px 20px auto 1fr auto; gap: 4px; align-items: baseline; padding: 3px 4px; font-size: 11px; font-family: var(--mono); border-bottom: 1px solid var(--border); cursor: pointer; white-space: normal; }
+.run-step:hover { background: var(--bg3); }
+.run-step .bp { color: transparent; text-align: center; }
+.run-step:hover .bp { color: var(--text3); }
+.run-step.has-bp .bp { color: var(--danger); }
+.run-step.running { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.run-step.paused { background: color-mix(in srgb, var(--warn) 22%, transparent); outline: 1px solid var(--warn); }
+.run-step .lbl { word-break: break-all; }
+.run-step .ms { color: var(--text3); font-size: 10px; }
+.run-step .ln { color: var(--text3); font-size: 10px; min-width: 26px; text-align: right; padding-right: 4px; }
+.run-step .ln:empty { padding: 0; min-width: 0; }
+.run-step .detail { grid-column: 4 / -1; color: #ff6b6b; word-break: break-word; }
+.run-step .detail:empty { display: none; }
+.bridge-log { margin: 0; font-size: 11px; font-family: var(--mono); white-space: pre-wrap; word-break: break-all; color: var(--text2); background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; }
+
+/* ---- TEST EXPLORER ---- */
+.exp-list { display: flex; flex-direction: column; gap: 3px; max-height: 240px; overflow-y: auto; }
+.exp-row { display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; }
+.exp-row:hover { border-color: var(--text3); }
+.exp-row.selected { border-color: var(--accent); background: var(--bg3); }
+.exp-row .exp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exp-row .exp-meta { color: var(--text3); font-size: 10px; white-space: nowrap; }
+.exp-row .btn-icon { padding: 2px 6px; }
+.exp-empty { color: var(--text3); font-size: 11px; padding: 8px 4px; line-height: 1.6; }
+.exp-detail { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg2); }
+
 /* ---- SCROLLBAR GLOBAL ---- */
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* ---- Line numbers beside a code box (attachLineNumbers) ---- */
+.code-lines { display: flex; align-items: stretch; }
+.code-gutter {
+  flex: none; min-width: 34px; overflow: hidden; white-space: pre; text-align: right; user-select: none;
+  font-family: var(--mono); color: var(--text3); background: var(--bg3);
+  border: 1px solid var(--border); border-right: none; border-radius: var(--radius) 0 0 var(--radius);
+  padding: 7px 6px 40px 6px; box-sizing: border-box;
+}
+.code-lines textarea { flex: 1; min-width: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; white-space: pre; overflow: auto; }

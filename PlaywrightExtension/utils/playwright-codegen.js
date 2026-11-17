@@ -24,6 +24,9 @@ export const PlaywrightCodegen = {
       screenshot:  a => `await ${p}.screenshot({ path: 'screenshot.png'${a.fullPage ? ', fullPage: true' : ''} });`,
       wait:        a => a.selector ? `await ${p}.waitForSelector('${q(a.selector)}');` : `await ${p}.waitForLoadState('networkidle');`,
       assertText:  a => `await expect(${p}.${loc(a)}).toContainText('${q(a.value)}');`,
+      assertVisible: a => `await expect(${p}.${loc(a)}).toBeVisible();`,
+      assertValue: a => `await expect(${p}.${loc(a)}).toHaveValue('${q(a.value)}');`,
+      assertChecked: a => `await expect(${p}.${loc(a)})${a.checked === false ? '.not' : ''}.toBeChecked();`,
       assertUrl:   a => `await expect(${p}).toHaveURL('${q(a.url)}');`,
       assertTitle: a => `await expect(${p}).toHaveTitle('${q(a.title)}');`,
       // Only the names of the chosen files are known; the test needs their paths.
@@ -49,7 +52,8 @@ export const PlaywrightCodegen = {
     const last = () => normalized[normalized.length - 1];
     for (const a of actions) {
       if (a.type === 'click' && ['HTML', 'BODY'].includes(a.elementInfo?.tag)) continue;
-      if (a.selector && last()?.type === 'hover' && last().selector === a.selector) normalized.pop();
+      // A check of the hovered element is not a step on it: the hover may be what shows what is checked.
+      if (a.selector && !String(a.type).startsWith('assert') && last()?.type === 'hover' && last().selector === a.selector) normalized.pop();
       if (['navigate', 'reload', 'goBack', 'end'].includes(a.type) && last()?.type === 'hover') normalized.pop();
       if (a.type === 'dblclick') {
         for (let n = 0; n < 2 && last()?.type === 'click' && last().selector === a.selector; n += 1) normalized.pop();

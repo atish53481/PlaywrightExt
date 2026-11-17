@@ -42,6 +42,25 @@ export const BridgeClient = {
     });
   },
 
+  // Opens one of Playwright's own tools on this machine: 'uiMode' { tests: [{ name, code }] }
+  // (npx playwright test --ui), 'debug' { code } (--debug, the Playwright Inspector), or
+  // 'codegen' { url }. Resolves with the done message when the tool's window is closed; for
+  // codegen it carries the recorded test in `code`. onEvent gets the status and output lines.
+  async launchTool(cmd, payload, onEvent) {
+    const ws = await this.connect();
+    return new Promise((resolve, reject) => {
+      const end = (settle, value) => { ws.onclose = null; ws.close(); settle(value); };
+      ws.onmessage = (e) => {
+        let msg; try { msg = JSON.parse(e.data); } catch { return; }
+        onEvent?.(msg);
+        if (msg.type === 'done') end(resolve, msg);
+        if (msg.type === 'error') end(reject, new Error(msg.error));
+      };
+      ws.onclose = () => reject(new Error('Bridge connection closed'));
+      ws.send(JSON.stringify({ id: Date.now(), cmd, payload }));
+    });
+  },
+
   // Whether the bridge has Playwright's test agents and MCP server installed (see its README).
   async hasAgents() {
     const ws = await this.connect(800);

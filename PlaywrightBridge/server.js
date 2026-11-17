@@ -9,14 +9,15 @@
 
 import { WebSocketServer } from 'ws';
 import { spawn } from 'child_process';
-import { writeFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, existsSync, rmSync } from 'fs';
 import { rm } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import os from 'os';
 import path from 'path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 8787;
+// The extension connects to 8787. Another port is for trying a second bridge beside a running one.
+const PORT = Number(process.env.PW_BRIDGE_PORT) || 8787;
 const testsDir = path.join(__dirname, 'tests');
 mkdirSync(testsDir, { recursive: true });
 
@@ -44,6 +45,18 @@ When you are done, answer in two lines: what was wrong, and what you changed.`;
 console.log(`[bridge] Playwright bridge listening on ws://127.0.0.1:${PORT}`);
 console.log('[bridge] Test runs: Generator panel → 🚀 Run via Playwright');
 console.log('[bridge] LLM: select "Bridge (Claude Code)" provider in extension Settings');
+console.log('[bridge] Playwright tools: Test Explorer panel → UI Mode, Inspector, Codegen');
+
+// Playwright's own tools (UI Mode, the Inspector, Codegen) are started with node and the
+// Playwright command line, each word of the command given as it is: no shell reads them, so
+// nothing a client sends (an address, a test's name) is ever run as a command.
+const PLAYWRIGHT_CLI = path.join(__dirname, 'node_modules', '@playwright', 'test', 'cli.js');
+const playwrightTool = (args) => spawn(process.execPath, [PLAYWRIGHT_CLI, ...args], { cwd: __dirname });
+const explorerDir = path.join(testsDir, 'explorer');
+// A file name made from a test's name: letters, digits, and dashes only.
+const fileSlug = (name) => String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'test';
+// A tool stays open after the side panel is closed: it is not ended with the connection.
+const openTools = new Set();
 
 function stripFences(code) {
   const fences = [...code.matchAll(/```(?:typescript|ts|javascript|js)?\n([\s\S]*?)```/g)];
@@ -133,6 +146,53 @@ wss.on('connection', (ws) => {
     }
 
     if (cmd === 'stop') { child?.kill(); send({ id, type: 'status', message: 'Run stopped' }); return; }
+
+    // Playwright's own tools. Each tells the panel what it prints, and `done` when its window is closed.
+    if (cmd === 'debug' || cmd === 'uiMode' || cmd === 'codegen') {
+      if (!existsSync(PLAYWRIGHT_CLI)) {
+        send({ id, type: 'error', error: 'Playwright is not installed in the bridge. In PlaywrightBridge, run: npm run setup' });
+        return;
+      }
+      let args, note, atClose = () => ({});
+      if (cmd === 'debug') {
+        // npx playwright test --debug: the Playwright Inspector steps through the test.
+        writeFileSync(path.join(testsDir, 'bridge.spec.ts'), stripFences(payload?.code || ''), 'utf8');
+        args = ['test', 'bridge.spec.ts', '--debug'];
+        note = 'Test file written → tests/bridge.spec.ts\nOpening the Playwright Inspector: step through the test there...\n';
+      } else if (cmd === 'uiMode') {
+        // npx playwright test --ui, with the tests of the extension's Test Explorer.
+        const tests = (Array.isArray(payload?.tests) ? payload.tests : []).filter((t) => typeof t?.code === 'string').slice(0, 200);
+        if (tests.length === 0) { send({ id, type: 'error', error: 'There is no test to open: add one to the Test Explorer first' }); return; }
+        rmSync(explorerDir, { recursive: true, force: true });
+        mkdirSync(explorerDir, { recursive: true });
+        tests.forEach((t, i) => writeFileSync(path.join(explorerDir, `${String(i + 1).padStart(2, '0')}-${fileSlug(t.name)}.spec.ts`), stripFences(t.code), 'utf8'));
+        args = ['test', 'tests/explorer', '--ui'];
+        note = `${tests.length} test(s) written → tests/explorer/\nOpening Playwright UI Mode...\n`;
+      } else {
+        // npx playwright codegen <url>: what is recorded there is sent back when its window is closed.
+        let url = '';
+        if (payload?.url) {
+          try {
+            const parsed = new URL(payload.url);
+            if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('only an http(s) address is opened');
+            url = parsed.href;
+          } catch (e) { send({ id, type: 'error', error: `Not an address Codegen can open: ${e.message}` }); return; }
+        }
+        const out = path.join(testsDir, 'codegen.spec.ts');
+        rmSync(out, { force: true });
+        args = ['codegen', '--target', 'playwright-test', '-o', out, ...(url ? [url] : [])];
+        note = 'Opening Playwright Codegen: close its window when you are done, and the recording comes back here...\n';
+        atClose = () => ({ code: existsSync(out) ? readFileSync(out, 'utf8') : '' });
+      }
+      send({ id, type: 'status', message: note });
+      const tool = playwrightTool(args);
+      openTools.add(tool);
+      tool.stdout.on('data', (d) => send({ id, type: 'output', line: d.toString() }));
+      tool.stderr.on('data', (d) => send({ id, type: 'output', line: d.toString() }));
+      tool.on('error', (e) => { openTools.delete(tool); send({ id, type: 'error', error: `Playwright could not be started: ${e.message}` }); });
+      tool.on('close', (exitCode) => { openTools.delete(tool); send({ id, type: 'done', exitCode, passed: exitCode === 0, ...atClose() }); });
+      return;
+    }
 
     // Run generated Playwright code with the real runner (headed)
     if (cmd === 'runCode') {

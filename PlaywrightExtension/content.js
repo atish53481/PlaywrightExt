@@ -4,7 +4,7 @@
   'use strict';
   // Raised with every change to this file: after the extension is reloaded, a page still holds
   // the script it was given before, and that one no longer reaches the extension.
-  const VERSION = 5;
+  const VERSION = 6;
   if (window.__pasContentLoaded === VERSION) return;
   window.__pasContentLoaded = VERSION;
 
@@ -17,6 +17,10 @@
   let lastHovered = null;
   // How many steps the recording held before this page loaded, for the count in the monitor.
   let earlierActions = 0;
+  // The recorder tool in use, as in Playwright's codegen: 'pick' shows the locator of the
+  // element clicked next, 'assertVisible', 'assertText', and 'assertValue' record a check of
+  // it. While a tool is in use the page does not get the pointer. null for none.
+  let tool = null;
 
   // The page itself, or a frame inside it. A frame records its own steps; the page shows the
   // monitor, answers the side panel, and records where the tab goes.
@@ -96,7 +100,8 @@
     document.body.appendChild(highlightOverlay);
   }
 
-  function highlightElement(el) {
+  // `text` is what the label says; the element's short selector when none is given.
+  function highlightElement(el, text) {
     if (!highlightOverlay) createOverlay();
     const rect = el.getBoundingClientRect();
     Object.assign(highlightOverlay.style, {
@@ -104,7 +109,7 @@
       width: rect.width + 'px', height: rect.height + 'px'
     });
     const label = document.getElementById('__pas-label');
-    if (label) label.textContent = getBestLocatorText(el);
+    if (label) label.textContent = text ?? getBestLocatorText(el);
   }
 
   function hideHighlight() {
@@ -366,8 +371,16 @@
       <div id="__pas-monitor-head" style="padding:6px 10px;background:#00d4aa;color:#000;font-weight:bold;display:flex;justify-content:space-between;align-items:center;cursor:move">
         <span>🔴 Recording</span><span id="__pas-monitor-count">0 actions</span>
       </div>
+      <div id="__pas-monitor-tools" style="display:flex;gap:4px;flex-wrap:wrap;padding:6px;border-bottom:1px solid #2a2e36">
+        ${TOOLS.map(([name, label, title]) => `<button type="button" data-tool="${name}" title="${title}" style="${TOOL_BUTTON}">${label}</button>`).join('')}
+      </div>
+      <div id="__pas-monitor-box" style="display:none;padding:6px;border-bottom:1px solid #2a2e36"></div>
       <div id="__pas-monitor-list" style="overflow-y:auto;padding:4px 8px;flex:1"></div>`;
     document.body.appendChild(monitorPanel);
+    monitorPanel.querySelector('#__pas-monitor-tools').addEventListener('click', (e) => {
+      const name = e.target.closest?.('[data-tool]')?.getAttribute('data-tool');
+      if (name) setTool(tool === name ? null : name);
+    });
 
     // Drag support so the panel never blocks what the user is testing
     const head = monitorPanel.querySelector('#__pas-monitor-head');
@@ -408,8 +421,10 @@
   }
 
   // --- Recording ---
-  function recordAction(type, data) {
-    if (!isRecording || isPaused) return;
+  // `always` is for a check made with a recorder tool: it is asked for, so it is a step
+  // even while the recording of what the user does is paused.
+  function recordAction(type, data, always = false) {
+    if (!isRecording || (isPaused && !always)) return;
     // Any other step ends the wait for the page to answer a click on a plain part of it.
     dropHeldClick();
     const action = { type, ...data, ts: Date.now(), url: location.href };
@@ -569,7 +584,7 @@
   }
 
   function onMouseOver(e) {
-    if (!isRecording || isPaused) return;
+    if (!isRecording || isPaused || tool) return;
     const el = e.target;
     if (!(el instanceof Element) || el === document.documentElement || el === document.body) return;
     if (monitorPanel && monitorPanel.contains(el)) return;
@@ -613,6 +628,8 @@
 
   function onClick(e) {
     if (monitorPanel && monitorPanel.contains(e.target)) return;
+    // A click made with a recorder tool is the tool's, and is never a step.
+    if (tool) return;
     if (isInspecting) {
       e.preventDefault();
       e.stopPropagation();
@@ -756,6 +773,206 @@
     pageWatcher = null;
     clearTimeout(hover?.timer);
     hover = null;
+  }
+
+  // --- Recorder tools ---
+  // What Playwright's codegen offers next to recording: pick an element to see its locator,
+  // and check that an element is shown, holds a text, or has a value. A tool is chosen in the
+  // monitor or in the side panel, and is used by clicking an element. That click, and every
+  // other use of the pointer while a tool is chosen, is kept from the page.
+  const TOOLS = [
+    ['pick', '🎯 Pick', 'Show the locator of an element'],
+    ['assertVisible', '👁 Visible', 'Check that an element is shown: expect(...).toBeVisible()'],
+    ['assertText', '🔤 Text', 'Check the text of an element: expect(...).toContainText(...)'],
+    ['assertValue', '✏ Value', 'Check the value of a field: expect(...).toHaveValue(...) or toBeChecked()'],
+  ];
+  const TOOL_BUTTON = 'all:revert;background:#2a2e36;color:#e6e6e6;border:1px solid #3a3f4a;border-radius:4px;font:11px monospace;padding:3px 7px;cursor:pointer;margin:0';
+  const TOOL_HINT = { pick: 'Pick locator', assertVisible: 'Assert visibility', assertText: 'Assert text', assertValue: 'Assert value' };
+  // The element the pointer is on while a tool is chosen, so its locator is worked out once.
+  let toolHover = null;
+  // A checkbox already shows its new state while its click is handled, and gets the old one
+  // back when the click is kept from the page: what it holds is read when the pointer goes down.
+  let checkedBefore = { el: null, checked: false };
+
+  const inMonitor = (e) => Boolean(monitorPanel && e.target instanceof Node && monitorPanel.contains(e.target));
+
+  // Chooses a tool, or none. `tell` is false when the side panel is the one that chose.
+  function setTool(next, tell = true) {
+    tool = next || null;
+    toolHover = null;
+    hideHighlight();
+    if (monitorPanel) {
+      for (const button of monitorPanel.querySelectorAll('[data-tool]')) {
+        const on = button.getAttribute('data-tool') === tool;
+        button.style.background = on ? '#00d4aa' : '#2a2e36';
+        button.style.color = on ? '#000' : '#e6e6e6';
+      }
+      if (tool) showBox(null);
+      setMonitorState(tool ? `🎯 ${TOOL_HINT[tool]}: click an element (Esc cancels)` : isPaused ? '⏸ Paused' : '🔴 Recording');
+    }
+    // The side panel shows the same choice, and passes it on to the frames of the page.
+    if (tell) {
+      try { chrome.runtime.sendMessage({ type: 'RECORDER_TOOL', tool }, () => void chrome.runtime.lastError); } catch { /* the extension was reloaded */ }
+    }
+  }
+
+  // The box under the tools: the picked locator with a Copy button, or the text of a check
+  // being written. `build(box)` fills it; null empties and hides it.
+  function showBox(build) {
+    const box = monitorPanel?.querySelector('#__pas-monitor-box');
+    if (!box) return;
+    box.textContent = '';
+    box.style.display = build ? 'block' : 'none';
+    if (build) build(box);
+  }
+
+  function boxButton(label, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.style.cssText = TOOL_BUTTON;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function showPicked(locator) {
+    showBox((box) => {
+      const code = document.createElement('div');
+      code.textContent = `page.${locator}`;
+      code.style.cssText = 'color:#7ee0c8;word-break:break-all;margin-bottom:4px';
+      box.append(code, boxButton('📋 Copy', () => {
+        navigator.clipboard?.writeText(code.textContent).catch(() => {});
+        setMonitorState('📋 Copied');
+      }));
+    });
+  }
+
+  // The text a check asks for, shown to be shortened or corrected before it is recorded.
+  let acceptText = null;
+  function askText(at, text) {
+    showBox((box) => {
+      const note = document.createElement('div');
+      note.textContent = 'Check that the element contains this text (Enter accepts):';
+      note.style.cssText = 'margin-bottom:4px;color:#9aa0aa';
+      const area = document.createElement('textarea');
+      area.id = '__pas-monitor-text';
+      area.value = text;
+      area.style.cssText = 'all:revert;box-sizing:border-box;width:100%;height:48px;background:#0f1115;color:#e6e6e6;border:1px solid #3a3f4a;border-radius:4px;font:12px monospace;padding:4px;margin-bottom:4px';
+      acceptText = () => {
+        const value = tidy(area.value);
+        acceptText = null;
+        if (value) recordAction('assertText', { ...at, value }, true);
+        setTool(null);
+      };
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:4px;justify-content:flex-end';
+      row.append(boxButton('✖ Cancel', () => { acceptText = null; setTool(null); }), boxButton('✔ Accept', () => acceptText?.()));
+      box.append(note, area, row);
+      area.focus();
+      area.select();
+    });
+  }
+
+  // The element a tool is used on: the control around an icon or a span, as for a recorded click.
+  function toolTarget(e) {
+    const el = targetOf(e);
+    if (!(el instanceof Element) || (highlightOverlay && highlightOverlay.contains(el))) return null;
+    const target = el.closest?.(ACTIONABLE) || el;
+    return target === document.documentElement || target === document.body ? null : target;
+  }
+
+  function useTool(el) {
+    const info = getElementInfo(el);
+    const at = { selector: getBestLocatorText(el), locator: info.locators[0]?.locator };
+    if (tool === 'pick') {
+      const locator = (isTop ? '' : framePrefix()) + at.locator;
+      try { chrome.runtime.sendMessage({ type: 'LOCATOR_PICKED', locator, elementInfo: info }, () => void chrome.runtime.lastError); } catch { /* the extension was reloaded */ }
+      setTool(null);
+      showPicked(locator);
+      highlightElement(el, at.locator);
+      setTimeout(hideHighlight, 1200);
+      return;
+    }
+    // A check is a step of a recording: there is nothing to add it to otherwise.
+    if (!isRecording) { setTool(null); return; }
+    const field = el.matches('input, textarea, select');
+    if (tool === 'assertVisible') {
+      recordAction('assertVisible', at, true);
+      setTool(null);
+    } else if (tool === 'assertText') {
+      const text = field ? '' : tidy(visibleText(el));
+      if (!text) { setMonitorState('🔤 No text there. Use ✏ Value for a field'); return; }
+      // A frame has no monitor to write the text in: the whole text is checked.
+      if (!monitorPanel) { recordAction('assertText', { ...at, value: text.slice(0, 200) }, true); setTool(null); return; }
+      highlightElement(el, at.locator);
+      askText(at, text.slice(0, 200));
+    } else if (tool === 'assertValue') {
+      if (el.matches('input[type="checkbox"], input[type="radio"]')) {
+        recordAction('assertChecked', { ...at, checked: checkedBefore.el === el ? checkedBefore.checked : el.checked }, true);
+      } else if (field) {
+        recordAction('assertValue', { ...at, value: el.value }, true);
+      } else {
+        setMonitorState('✏ Not a field. Use 🔤 Text for this element');
+        return;
+      }
+      setTool(null);
+    }
+  }
+
+  function onToolClick(e) {
+    if (!tool || inMonitor(e)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    // The text of a check is being written: a click elsewhere does not start another.
+    if (acceptText) return;
+    const el = toolTarget(e);
+    if (el) useTool(el);
+  }
+
+  function onToolPointer(e) {
+    if (!tool || inMonitor(e)) return;
+    if (e.type === 'pointerdown' || e.type === 'mousedown') {
+      const el = toolTarget(e);
+      const box = el?.matches('input') ? el : el?.closest('label')?.control;
+      if (box && 'checked' in box) checkedBefore = { el: box, checked: box.checked };
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+
+  function onToolMove(e) {
+    if (!tool || inMonitor(e) || acceptText) return;
+    const el = toolTarget(e);
+    if (!el || el === toolHover) return;
+    toolHover = el;
+    highlightElement(el, getElementInfo(el).locators[0]?.locator);
+  }
+
+  function onToolKey(e) {
+    // What is typed in the monitor is the monitor's: the page and the recorder do not hear it.
+    if (inMonitor(e)) {
+      e.stopPropagation();
+      if (e.target.id === '__pas-monitor-text') {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); acceptText?.(); }
+        if (e.key === 'Escape') { acceptText = null; setTool(null); }
+      }
+      return;
+    }
+    if (tool && e.key === 'Escape') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      acceptText = null;
+      setTool(null);
+    }
+  }
+
+  // Listened to on the window, before the recorder's own handlers on the document, for as
+  // long as the page lives: each returns at once when no tool is chosen.
+  window.addEventListener('click', onToolClick, true);
+  window.addEventListener('mousemove', onToolMove, true);
+  window.addEventListener('keydown', onToolKey, true);
+  for (const name of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick', 'auxclick', 'contextmenu']) {
+    window.addEventListener(name, onToolPointer, true);
   }
 
   // --- Test Runner: locator resolution + step execution ---
@@ -989,6 +1206,10 @@
             return !el.disabled !== negated ? { ok: true } : fail(`Element disabled state mismatch: ${step.locator.raw}`);
           case 'toBeDisabled':
             return !!el.disabled !== negated ? { ok: true } : fail(`Element disabled state mismatch: ${step.locator.raw}`);
+          case 'toBeChecked': {
+            const checked = 'checked' in el ? Boolean(el.checked) : el.getAttribute('aria-checked') === 'true';
+            return checked !== negated ? { ok: true } : fail(`Element is ${checked ? 'checked' : 'not checked'}, expected ${negated ? 'not checked' : 'checked'}: ${step.locator.raw}`);
+          }
           default:
             return fail(`Unsupported assertion: ${step.assertion}`);
         }
@@ -1002,7 +1223,7 @@
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // A frame starts and stops recording with the page, and leaves every answer to the page.
     if (!isTop) {
-      if (!['START_RECORDING', 'PAUSE_RECORDING', 'RESUME_RECORDING', 'STOP_RECORDING'].includes(msg.type)) return false;
+      if (!['START_RECORDING', 'PAUSE_RECORDING', 'RESUME_RECORDING', 'STOP_RECORDING', 'SET_TOOL'].includes(msg.type)) return false;
       sendResponse = () => {};
     }
     switch (msg.type) {
@@ -1032,6 +1253,8 @@
         // Where the tab is when the recording ends: the last step is checked against it.
         if (isTop) recordAction('end', {});
         isRecording = false;
+        acceptText = null;
+        setTool(null, false);
         stopListeningForSteps();
         removeMonitor();
         sendResponse({ ok: true, actions: recordedActions });
@@ -1053,6 +1276,30 @@
         document.removeEventListener('click', onClick, true);
         sendResponse({ ok: true });
         break;
+
+      // A recorder tool chosen in the side panel. Picking a locator needs no recording (the
+      // debugger picks one for a failed step); a check is a step, and needs one.
+      case 'SET_TOOL':
+        if (msg.tool && msg.tool !== 'pick' && !isRecording) {
+          sendResponse({ ok: false, error: 'Start recording first' });
+        } else {
+          acceptText = null;
+          setTool(msg.tool, false);
+          sendResponse({ ok: true });
+        }
+        break;
+
+      // Shows where a step of a test acts: the debugger asks when a step is pointed at.
+      case 'HIGHLIGHT': {
+        const found = resolveLocator(msg.locator);
+        if (found) {
+          found.scrollIntoView({ block: 'center', behavior: 'instant' });
+          highlightElement(found, msg.locator.src || msg.locator.raw || '');
+          setTimeout(hideHighlight, 1500);
+        }
+        sendResponse({ ok: true, found: Boolean(found) });
+        break;
+      }
 
       case 'GET_ELEMENT_AT':
         const el = document.elementFromPoint(msg.x, msg.y);

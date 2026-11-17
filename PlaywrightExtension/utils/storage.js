@@ -42,6 +42,16 @@ export const Storage = {
     else await this.remove('pas_skills_project');
   },
 
+  // The Test Explorer's tests, each with the result of its last run. They stay in this browser.
+  async getTests() {
+    const data = await this.get('pas_tests');
+    return Array.isArray(data.pas_tests) ? data.pas_tests : [];
+  },
+
+  async saveTests(tests) {
+    await this.set({ pas_tests: tests });
+  },
+
   async getRecordings() {
     const data = await this.get('pas_recordings');
     return data.pas_recordings || [];
