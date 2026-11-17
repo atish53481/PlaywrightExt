@@ -17,7 +17,8 @@ import { withSkills } from './utils/skill-context.js';
 import { MAX_FILE_BYTES, readUploadedFile } from './utils/file-text.js';
 import { MAX_HEALS, runUntilPassing } from './utils/heal-run.js';
 import { PlaywrightCodegen } from './utils/playwright-codegen.js';
-import { TestRunner } from './utils/test-runner.js';
+import { TestRunner, RunController } from './utils/test-runner.js';
+import { setupExplorer, saveTestToExplorer } from './panels/explorer.js';
 
 // ---- State ----
 let orchestrator = new Orchestrator(new MockProvider());
@@ -59,6 +60,56 @@ async function init() {
   setupPlatform();
   setupSaveToProject();
   listenForContentMessages();
+  CODE_EDITORS.forEach((id) => attachLineNumbers(document.getElementById(id)));
+  await setupExplorer({
+    runLive: runCodeLive,
+    runBridge: runCodeViaBridge,
+    toast: showToast,
+    download: (code, name) => orchestrator.getAgent('export').exportAsCode(code, 'typescript', name || 'playwright-test'),
+  });
+}
+
+// ---- Line numbers for code boxes ----
+// The textareas that hold a script get a gutter of line numbers, the numbers Run Results name.
+const CODE_EDITORS = ['script-edit-content', 'exp-code', 'healer-code', 'healer-fixed', 'healer-script', 'fw-code'];
+
+function attachLineNumbers(ta) {
+  if (!ta || ta.dataset.lineNumbers) return;
+  ta.dataset.lineNumbers = '1';
+  ta.setAttribute('wrap', 'off');
+  const wrap = document.createElement('div');
+  wrap.className = 'code-lines';
+  const gutter = document.createElement('div');
+  gutter.className = 'code-gutter';
+  gutter.setAttribute('aria-hidden', 'true');
+  ta.parentNode.insertBefore(wrap, ta);
+  wrap.append(gutter, ta);
+
+  let shown = 0;
+  const refresh = () => {
+    const css = getComputedStyle(ta);
+    gutter.style.fontSize = css.fontSize;
+    gutter.style.lineHeight = css.lineHeight;
+    gutter.style.paddingTop = css.paddingTop;
+    const count = ta.value.split('\n').length;
+    if (count !== shown) {
+      shown = count;
+      gutter.textContent = Array.from({ length: count }, (_, i) => i + 1).join('\n');
+    }
+    gutter.scrollTop = ta.scrollTop;
+  };
+  ta.addEventListener('input', refresh);
+  ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
+  // Code put in the box by the extension (`ta.value = ...`) fires no input event.
+  const own = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+  Object.defineProperty(ta, 'value', {
+    configurable: true,
+    get() { return own.get.call(this); },
+    set(v) { own.set.call(this, v); refresh(); },
+  });
+  // A box in a hidden panel has no size yet: measure again when it is shown.
+  new ResizeObserver(refresh).observe(ta);
+  refresh();
 }
 
 // ---- Navigation ----
@@ -396,19 +447,31 @@ function setupGenerator() {
     });
   });
 
-  // ---- Run generated code live on the active page ----
-  const liveBtn = document.getElementById('gen-run-live');
-  liveBtn?.addEventListener('click', async () => {
+  // ---- Run generated code live on the active page, plainly or step by step ----
+  const runGenLive = async (btn, debug) => {
     const code = document.getElementById('gen-output')?.textContent || '';
     if (!code || code.includes('will appear here')) { showToast('Generate code first'); return; }
     await runCodeLive(code, {
       section: document.getElementById('gen-run-section'),
       results: document.getElementById('gen-run-results'),
       summary: document.getElementById('gen-run-summary'),
-      btn: liveBtn,
+      btn, debug,
       healBtn: document.getElementById('gen-heal'),
-      idPrefix: 'gen-run'
+      // A locator picked for a step while debugging is put in the code box.
+      onCodeChange: (changed) => setOutput(output, changed),
     });
+  };
+  const liveBtn = document.getElementById('gen-run-live');
+  liveBtn?.addEventListener('click', () => runGenLive(liveBtn, false));
+  const debugBtn = document.getElementById('gen-debug');
+  debugBtn?.addEventListener('click', () => runGenLive(debugBtn, true));
+
+  document.getElementById('gen-save-explorer')?.addEventListener('click', async () => {
+    const code = document.getElementById('gen-output')?.textContent || '';
+    if (!code || code.includes('will appear here')) { showToast('Generate code first'); return; }
+    const title = (document.getElementById('gen-input')?.value || '').trim().split('\n')[0].slice(0, 50);
+    const saved = await saveTestToExplorer({ name: title || 'Generated test', code: toSingleFile(extractCode(code)), source: 'generator' });
+    showToast(`"${saved.name}" is in the Test Explorer`);
   });
 }
 
@@ -416,8 +479,9 @@ function setupGenerator() {
 // Runs the code with the real Playwright runner. A run that fails is given to the healer,
 // with what the runner printed, and the healer's fix is run, twice at most. `onPassed(code)`
 // is told the code that passed, exactly as it was run: the healer's fix, or the given code
-// as one file.
-async function runCodeViaBridge(code, { section, results, summary, btn, onPassed, agentFirst = false }) {
+// as one file. Resolves with how the run ended ('passed', 'failed', 'skipped'), or null when
+// the bridge could not be reached. `heal: false` runs the code once and leaves a failed run as it is.
+async function runCodeViaBridge(code, { section, results, summary, btn, onPassed, agentFirst = false, heal = true, quiet = false }) {
   section.style.display = 'block';
   results.innerHTML = '<pre style="margin:0;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>';
   const log = results.querySelector('pre');
@@ -431,8 +495,8 @@ async function runCodeViaBridge(code, { section, results, summary, btn, onPassed
   // bridge runs through Playwright MCP: it debugs the test in a real browser and takes a minute or two.
   const quick = currentProvider !== 'mock';
   const agent = await BridgeClient.hasAgents().catch(() => false);
-  const canHeal = quick || agent;
-  if (agentFirst) {
+  const canHeal = heal && (quick || agent);
+  if (agentFirst && heal) {
     say(agent
       ? '🎭 Playwright agent ready: if the test fails, it debugs the test in a real browser and its fix is run again.\n'
       : `⚠ The Playwright agents are not installed in the bridge, so ${quick ? 'the AI provider heals a failed run instead' : 'a failed run is not healed'}. To install: cd PlaywrightBridge, then npx playwright init-agents --loop=claude\n`);
@@ -476,7 +540,7 @@ async function runCodeViaBridge(code, { section, results, summary, btn, onPassed
     if (result.outcome === 'passed') {
       summary.textContent = result.heals > 0 ? `✅ PASSED after the healer fixed the test (${fixes})` : '✅ Playwright run PASSED';
       onPassed?.(result.code);
-      showToast(result.heals > 0 ? 'Healed and passing — the code box holds the fixed test' : 'Real Playwright run passed — the code box holds the test that passed');
+      if (!quiet) showToast(result.heals > 0 ? 'Healed and passing — the code box holds the fixed test' : 'Real Playwright run passed — the code box holds the test that passed');
     } else if (result.outcome === 'skipped') {
       summary.textContent = result.heals > 0
         ? '⏭️ NOT RUN — the healer switched the test off: it judged the application, not the test, to be at fault'
@@ -487,60 +551,205 @@ async function runCodeViaBridge(code, { section, results, summary, btn, onPassed
       const why = result.reason
         || (result.heals > 0 ? `still failing after ${fixes} by the healer` : canHeal ? '' : 'to have a failed run healed, choose a real AI provider in Settings, or install the Playwright agents in the bridge');
       summary.textContent = `❌ Playwright run FAILED${why ? ` — ${why}` : ''}`;
-      showToast('Run failed — see output');
+      if (!quiet) showToast('Run failed — see output');
     }
+    return result.outcome;
   } catch (e) {
     summary.textContent = '🌉 bridge unavailable';
     log.textContent = `${e.message}\n\nSetup (once):\n  cd PlaywrightExt/PlaywrightBridge\n  npm run setup\n\nThen keep running:\n  npm start`;
+    return null;
   } finally {
     btn.disabled = false;
   }
 }
 
-async function runCodeLive(code, { section, results, summary, btn, healBtn, idPrefix }) {
+// One Live run at a time: every one of them drives the same tab.
+let liveRun = null;
+
+// Runs the code on the active tab, step by step. With `debug` the run is a debugged one, as
+// `npx playwright test --debug` is: it waits before its first step, and on a step that fails,
+// and the bar above the steps resumes it, runs one step, stops before a marked step, runs a
+// failed step again, or stops it. "Pick locator" shows the locator of an element clicked on
+// the page, and "Use for paused step" puts it in the step the run waits on and in the code
+// (`onCodeChange(code)` is told the new code). Resolves with { summary, steps, durationMs, code },
+// or null when nothing was run.
+async function runCodeLive(code, { section, results, summary, btn, healBtn, debug = false, onCodeChange, quiet = false }) {
+  if (liveRun) { showToast('A run is in progress on the page — stop it first'); return null; }
   const steps = TestRunner.parse(code);
-  if (steps.length === 0) { showToast('No runnable Playwright steps found in code'); return; }
+  if (steps.length === 0) { showToast('No runnable Playwright steps found in code'); return null; }
 
+  const icons = { pending: '⏳', running: '▶️', passed: '✅', failed: '❌', skipped: '⏭️', stopped: '⏹️' };
+  const controller = new RunController({ startPaused: debug, pauseOnFail: debug });
+  const outcomes = steps.map((s) => ({ label: s.label, status: 'pending', error: null, ms: null }));
+  let currentCode = code;
+  let pausedAt = -1, pausedOnFailure = false, picked = '', finished = false;
+  liveRun = controller;
+
+  // Everything shown is written with textContent: a label holds text of the page under test.
+  const make = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const barButton = (label, title) => {
+    const button = make('button', 'btn btn-icon', label);
+    button.type = 'button';
+    button.title = title;
+    return button;
+  };
+  const resumeBtn = barButton('▶ Resume', 'Run on, to the next breakpoint or failure');
+  const stepBtn = barButton('⏭ Step over', 'Run one step, then wait');
+  const pauseStepBtn = barButton('⏸ Pause', 'Wait before the next step');
+  const retryBtn = barButton('↻ Retry step', 'Run the failed step again');
+  const stopRunBtn = barButton('⏹ Stop', 'End the run');
+  const pickBtn = barButton('🎯 Pick locator', 'Click an element on the page to see its locator');
+  const bar = make('div', 'dbg-bar');
+  bar.append(resumeBtn, stepBtn, pauseStepBtn, retryBtn, stopRunBtn, pickBtn);
+
+  const pickCode = make('code');
+  const copyPickBtn = barButton('📋 Copy', 'Copy the locator');
+  const usePickBtn = barButton('↪ Use for paused step', 'Put this locator in the step the run waits on, and in the code');
+  const pickBox = make('div', 'dbg-pick');
+  pickBox.hidden = true;
+  pickBox.append(pickCode, copyPickBtn, usePickBtn);
+
+  const list = make('div', 'dbg-steps');
+  const rows = steps.map((s, i) => {
+    const row = make('div', 'run-step');
+    row.dataset.index = String(i);
+    const mark = make('span', 'bp', '●');
+    mark.title = 'Breakpoint: wait before this step';
+    const label = make('span', 'lbl', s.label);
+    const ln = make('span', 'ln', s.line ? `L${s.line}` : '');
+    if (s.line) ln.title = `Line ${s.line} of the script`;
+    row.append(mark, make('span', 'ic', icons.pending), ln, label, make('span', 'ms'), make('div', 'detail'));
+    list.append(row);
+    return row;
+  });
+  // The bar and the picked locator stay at the top of the results box while the steps scroll.
+  const head = make('div', 'dbg-head');
+  head.append(bar, pickBox);
+  results.textContent = '';
+  results.append(head, list);
   section.style.display = 'block';
-  summary.textContent = `0/${steps.length}`;
 
-  const icons = { pending: '⏳', running: '▶️', passed: '✅', failed: '❌', skipped: '⏭️' };
-  results.innerHTML = steps.map((s, i) =>
-    `<div class="run-step" id="${idPrefix}-step-${i}" style="padding:3px 6px;font-size:11px;font-family:monospace;border-bottom:1px solid var(--border,#333)">
-      <span id="${idPrefix}-step-icon-${i}">${icons.pending}</span> ${s.label.replace(/</g, '&lt;')}
-      <div id="${idPrefix}-step-detail-${i}" style="color:#ff6b6b;padding-left:20px"></div>
-    </div>`).join('');
+  const highlight = (i) => { if (steps[i]?.locator) TestRunner.sendToContent({ type: 'HIGHLIGHT', locator: steps[i].locator }); };
+  const draw = () => {
+    const waiting = controller.waiting && !finished;
+    resumeBtn.disabled = !waiting;
+    stepBtn.disabled = !waiting;
+    retryBtn.disabled = !(waiting && pausedOnFailure);
+    pauseStepBtn.disabled = finished || waiting || controller.paused;
+    stopRunBtn.disabled = finished;
+    usePickBtn.disabled = !(waiting && picked && steps[pausedAt]?.locator);
+    const done = outcomes.filter((o) => !['pending', 'running'].includes(o.status)).length;
+    if (finished) return;
+    summary.textContent = pausedAt >= 0
+      ? `⏸ Paused ${pausedOnFailure ? 'on failed' : 'before'} step ${pausedAt + 1}/${steps.length}`
+      : `${done}/${steps.length}`;
+  };
+
+  controller.onPause = (i, { failed }) => {
+    pausedAt = i; pausedOnFailure = failed;
+    rows[i]?.classList.add('paused');
+    rows[i]?.scrollIntoView({ block: 'nearest' });
+    if (!failed) highlight(i);
+    draw();
+  };
+  controller.onResume = () => {
+    rows.forEach((row) => row.classList.remove('paused'));
+    pausedAt = -1; pausedOnFailure = false;
+    draw();
+  };
+  resumeBtn.onclick = () => controller.resume();
+  stepBtn.onclick = () => controller.step();
+  retryBtn.onclick = () => controller.retry();
+  stopRunBtn.onclick = () => controller.stop();
+  pauseStepBtn.onclick = () => { controller.pause(); draw(); showToast('Waiting before the next step'); };
+  list.onclick = (e) => {
+    const row = e.target.closest('.run-step');
+    if (!row) return;
+    const i = Number(row.dataset.index);
+    if (e.target.classList.contains('bp')) row.classList.toggle('has-bp', controller.toggleBreakpoint(i));
+    else highlight(i);
+  };
+
+  // ---- Pick locator ----
+  if (results.pasOnPicked) window.removeEventListener('pas-locator-picked', results.pasOnPicked);
+  results.pasOnPicked = (e) => {
+    if (!pickBox.isConnected) return;
+    picked = e.detail.locator || '';
+    pickCode.textContent = `page.${picked}`;
+    pickBox.hidden = false;
+    pickBtn.classList.remove('on');
+    draw();
+  };
+  window.addEventListener('pas-locator-picked', results.pasOnPicked);
+  pickBtn.onclick = async () => {
+    const answer = await TestRunner.sendToContent({ type: 'SET_TOOL', tool: 'pick' });
+    if (!answer?.ok) { showToast(answer?.error || 'Page did not respond — refresh the tab and retry'); return; }
+    pickBtn.classList.add('on');
+    showToast('Click an element on the page (Esc cancels)');
+  };
+  copyPickBtn.onclick = () => copyText(pickCode.textContent);
+  usePickBtn.onclick = () => {
+    const step = steps[pausedAt];
+    const locator = picked && TestRunner.parseLocator(`page.${picked}`);
+    if (!step?.locator) return;
+    // A locator through a frame is one the page cannot follow: it runs with the real runner only.
+    if (!locator || /frameLocator\(/.test(picked)) { showToast('Run on Page cannot follow this locator — put it in the code and Run via Playwright'); return; }
+    const old = step.locator.src;
+    // Every step that used the old locator gets the new one: it is the same element.
+    steps.forEach((s, i) => {
+      if (!s.locator || s.locator.src !== old) return;
+      s.locator = { ...locator, raw: s.locator.raw.split(old).join(locator.src) };
+      s.label = s.label.split(old).join(locator.src);
+      outcomes[i].label = s.label;
+      rows[i].querySelector('.lbl').textContent = s.label;
+    });
+    const changed = old ? currentCode.split(old).join(locator.src) : currentCode;
+    if (changed !== currentCode) {
+      currentCode = changed;
+      onCodeChange?.(currentCode);
+      showToast('Locator replaced in the code — Retry step, then Resume');
+    } else {
+      showToast('Locator used for this run only — change the code by hand');
+    }
+    highlight(pausedAt);
+    draw();
+  };
 
   btn.disabled = true;
   if (healBtn) healBtn.style.display = 'none';
-  const failedSteps = [];
-  let done = 0;
+  draw();
+  const started = Date.now();
+  let runSummary = null;
   try {
-    const runSummary = await TestRunner.run(steps, (i, status, detail) => {
-      const icon = document.getElementById(`${idPrefix}-step-icon-${i}`);
-      if (icon) icon.textContent = icons[status] || '';
-      if (status !== 'running') {
-        done++;
-        summary.textContent = `${done}/${steps.length}`;
-      }
-      if (status === 'failed' && detail) {
-        failedSteps.push({ label: steps[i].label, error: detail });
-        const d = document.getElementById(`${idPrefix}-step-detail-${i}`);
-        if (d) d.textContent = detail;
-      }
-      document.getElementById(`${idPrefix}-step-${i}`)?.scrollIntoView({ block: 'nearest' });
-    });
-    summary.textContent = `✅ ${runSummary.passed} passed · ❌ ${runSummary.failed} failed · ⏭️ ${runSummary.skipped} skipped`;
-    showToast(runSummary.failed === 0 ? 'All runnable steps passed!' : `${runSummary.failed} step(s) failed`);
+    runSummary = await TestRunner.run(steps, (i, status, detail, ms) => {
+      outcomes[i] = { label: steps[i].label, line: steps[i].line ?? null, status, error: status === 'failed' ? detail : null, ms: ms ?? null };
+      const row = rows[i];
+      row.querySelector('.ic').textContent = icons[status] || '';
+      row.querySelector('.ms').textContent = ms != null ? `${ms}ms` : '';
+      const at = steps[i].line ? `Line ${steps[i].line}: ` : '';
+      row.querySelector('.detail').textContent = status === 'failed' ? `${at}${detail || ''}` : '';
+      row.classList.toggle('running', status === 'running');
+      if (status !== 'stopped') row.scrollIntoView({ block: 'nearest' });
+      draw();
+    }, controller);
+    finished = true;
+    summary.textContent = `${runSummary.stopped ? '⏹ Stopped · ' : ''}✅ ${runSummary.passed} passed · ❌ ${runSummary.failed} failed · ⏭️ ${runSummary.skipped} skipped`;
+    if (!quiet) showToast(runSummary.stopped ? 'Run stopped' : runSummary.failed === 0 ? 'All runnable steps passed!' : `${runSummary.failed} step(s) failed`);
 
     // 🎭 healer stage (official test-agents workflow): route failures to the healer agent
     if (runSummary.failed > 0 && healBtn) {
+      const failedSteps = outcomes.filter((o) => o.status === 'failed');
       healBtn.style.display = 'inline-block';
       healBtn.onclick = () => {
         const healerCode = document.getElementById('healer-code');
         const healerError = document.getElementById('healer-error');
-        if (healerCode) healerCode.value = code;
-        if (healerError) healerError.value = failedSteps.map(f => `${f.label} → ${f.error}`).join('\n');
+        if (healerCode) healerCode.value = currentCode;
+        if (healerError) healerError.value = failedSteps.map(f => `${f.line ? `Line ${f.line}: ` : ''}${f.label} → ${f.error}`).join('\n');
         document.querySelector('.nav-btn[data-panel="healer"]')?.click();
         document.getElementById('healer-run')?.click();
       };
@@ -548,8 +757,12 @@ async function runCodeLive(code, { section, results, summary, btn, healBtn, idPr
   } catch (e) {
     summary.textContent = `Error: ${e.message}`;
   } finally {
+    finished = true;
+    liveRun = null;
     btn.disabled = false;
+    draw();
   }
+  return runSummary ? { summary: runSummary, steps: outcomes, durationMs: Date.now() - started, code: currentCode } : null;
 }
 
 // ---- 3. TEST HEALER ----
@@ -559,18 +772,49 @@ let healerAnswer = '';
 function setupHealer() {
   const runBtn = document.getElementById('healer-run');
   const output = document.getElementById('healer-output');
+  const scriptBox = document.getElementById('healer-script-box');
+  const scriptEl = document.getElementById('healer-script');
+  const scriptNote = document.getElementById('healer-script-note');
+
+  // The complete fixed test from the Healer's answer, ready to copy or run. Without one in
+  // the answer, the broken script is shown so it can be fixed by hand following the report.
+  function showHealedScript(brokenCode) {
+    const code = toSingleFile(pickFixedCode(healerAnswer));
+    scriptEl.value = code ? (code.endsWith('\n') ? code : `${code}\n`) : brokenCode;
+    scriptNote.textContent = code
+      ? (/\btest\.(skip|fixme)\s*\(/.test(code)
+        ? '⏭️ The healer switched the test off: it judged the application, not the test, to be at fault.'
+        : '✅ Complete healed script. Copy it, or run it from the Test Explorer.')
+      : '⚠ The answer holds no complete test file. Your script is below: edit it following the report.';
+    scriptBox.style.display = '';
+  }
+  document.getElementById('healer-script-copy')?.addEventListener('click', () => copyText(scriptEl.value));
+  document.getElementById('healer-script-use')?.addEventListener('click', () => {
+    document.getElementById('healer-code').value = scriptEl.value;
+    showToast('Healed script put in Broken Test Code');
+  });
 
   runBtn?.addEventListener('click', async () => {
     const brokenCode = document.getElementById('healer-code')?.value?.trim();
     if (!brokenCode) { showToast('Paste broken test code first'); return; }
     const errorMessage = document.getElementById('healer-error')?.value?.trim();
     const context = document.getElementById('healer-context')?.value?.trim();
+    // The mock provider answers every request with one fixed sample, about a test that is not
+    // this one: it cannot heal. Say so instead of showing a report about some other script.
+    if (currentProvider === 'mock') {
+      scriptBox.style.display = 'none';
+      output.textContent = '⚠ Mock provider cannot heal your test: it returns a fixed sample report, not a fix for this script.\n\nChoose Claude, OpenAI, Gemini, or Bridge (local Claude Code) in Settings, then press Heal Test again.';
+      showToast('Mock provider cannot heal — choose a real AI provider in Settings');
+      return;
+    }
     runBtn.disabled = true;
+    scriptBox.style.display = 'none';
     showLoading(output, 'Test Healer analyzing broken test...');
     try {
       const result = await orchestrator.dispatch('healer', { brokenCode, errorMessage, context });
       setOutput(output, result);
       healerAnswer = typeof result === 'string' ? result : String(result ?? '');
+      showHealedScript(brokenCode);
     } catch(e) {
       output.textContent = `Error: ${e.message}`;
     } finally { runBtn.disabled = false; }
@@ -678,7 +922,8 @@ function setupHealer() {
     healTarget = null;
     healerAnswer = '';
     resetApply();
-    ['healer-code','healer-error','healer-context'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    ['healer-code','healer-error','healer-context','healer-script'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    scriptBox.style.display = 'none';
     document.getElementById('healer-output').innerHTML = '<span class="output-placeholder">Healing analysis will appear here...</span>';
   });
 }
@@ -695,6 +940,30 @@ function setupRecorder() {
   const editBtn  = document.getElementById('rec-edit');
   let isEditingCode = false;   // textarea currently open
   let userEditedCode = false;  // saved manual edits — don't overwrite with regenerated code
+
+  // Line numbers in the code box. The box is written with textContent in many places; each
+  // time it holds plain text, that text is split into one span per line and CSS counts them.
+  // A number is ::before content, so textContent still gives back exactly the code.
+  const numberLines = () => {
+    const only = output.childNodes.length === 1 ? output.firstChild : null;
+    if (!only || only.nodeType !== Node.TEXT_NODE) {
+      if (!output.querySelector(':scope > .code-line')) output.classList.remove('numbered');
+      return;
+    }
+    const lines = only.data.split('\n');
+    const frag = document.createDocumentFragment();
+    lines.forEach((line, i) => {
+      const last = i === lines.length - 1;
+      if (last && line === '') return;
+      const span = document.createElement('span');
+      span.className = 'code-line';
+      span.textContent = last ? line : `${line}\n`;
+      frag.append(span);
+    });
+    output.replaceChildren(frag);
+    output.classList.add('numbered');
+  };
+  if (output) new MutationObserver(numberLines).observe(output, { childList: true });
 
   function updateRecOutput() {
     if (recorderActions.length === 0 || isEditingCode || userEditedCode) return;
@@ -865,18 +1134,57 @@ function setupRecorder() {
     });
   });
 
-  const recLiveBtn = document.getElementById('rec-run-live');
-  recLiveBtn?.addEventListener('click', async () => {
+  // Run on Page, plainly or step by step (Debug).
+  const runRecLive = async (btn, debug) => {
+    if (recorderTabId !== null) { showToast('Stop recording first'); return; }
     const code = getRecordedCode();
     if (!code) return;
     await runCodeLive(code, {
       section: document.getElementById('rec-run-section'),
       results: document.getElementById('rec-run-results'),
       summary: document.getElementById('rec-run-summary'),
-      btn: recLiveBtn,
+      btn, debug,
       healBtn: document.getElementById('rec-heal'),
-      idPrefix: 'rec-run'
+      // A locator picked for a step while debugging is kept like a saved edit.
+      onCodeChange: (changed) => { output.textContent = changed; lastOutput = changed; userEditedCode = true; },
     });
+  };
+  const recLiveBtn = document.getElementById('rec-run-live');
+  recLiveBtn?.addEventListener('click', () => runRecLive(recLiveBtn, false));
+  const recDebugBtn = document.getElementById('rec-debug');
+  recDebugBtn?.addEventListener('click', () => runRecLive(recDebugBtn, true));
+
+  document.getElementById('rec-save-explorer')?.addEventListener('click', async () => {
+    const code = getRecordedCode();
+    if (!code) return;
+    const saved = await saveTestToExplorer({ name: document.getElementById('rec-test-name')?.value || 'Recorded Test', code, source: 'recorder' });
+    showToast(`"${saved.name}" is in the Test Explorer`);
+  });
+
+  // ---- Recorder tools: pick a locator, check what an element shows ----
+  // The same tools as in the monitor on the page. A tool is chosen here or there, and is
+  // used by clicking an element; the page is not given that click.
+  const toolBtns = [...document.querySelectorAll('#rec-tools [data-tool]')];
+  const showTool = (name) => toolBtns.forEach((b) => b.classList.toggle('on', b.getAttribute('data-tool') === name));
+  toolBtns.forEach((b) => b.addEventListener('click', async () => {
+    const name = b.classList.contains('on') ? null : b.getAttribute('data-tool');
+    const answer = await TestRunner.sendToContent({ type: 'SET_TOOL', tool: name });
+    if (!answer?.ok) { showToast(answer?.error || 'Page did not respond — refresh the tab and retry'); return; }
+    showTool(name);
+    if (name) showToast('Now click an element on the page (Esc cancels)');
+  }));
+  // The page chose a tool in its monitor, or was done with one.
+  window.addEventListener('pas-recorder-tool', (e) => showTool(e.detail.tool));
+  window.addEventListener('pas-locator-picked', (e) => {
+    document.getElementById('rec-picked').style.display = 'flex';
+    document.getElementById('rec-picked-code').textContent = `page.${e.detail.locator}`;
+  });
+  document.getElementById('rec-picked-copy')?.addEventListener('click', () => copyText(document.getElementById('rec-picked-code').textContent));
+  // A check made with a tool is shown at once, like every other step.
+  window.addEventListener('pas-recording-action', (e) => {
+    if (!String(e.detail.type).startsWith('assert')) return;
+    renderActionList();
+    updateRecOutput();
   });
 
   document.getElementById('rec-copy')?.addEventListener('click', () =>
@@ -1166,6 +1474,9 @@ function setupOrchestrator() {
   });
 }
 
+// Where `npm run dev:server` in PlaywrightPlatform listens.
+const DEFAULT_PLATFORM_URL = 'http://localhost:3000';
+
 // Settings → Platform: optional sign-in to the Playwright Platform backend.
 // Everything else in the extension works unchanged when this is left empty.
 function setupPlatform() {
@@ -1191,7 +1502,8 @@ function setupPlatform() {
 
   (async () => {
     const platform = await Storage.getPlatform();
-    urlInput.value = platform.url || '';
+    // The placeholder is only a hint: an empty box would sign in to nowhere.
+    urlInput.value = platform.url || DEFAULT_PLATFORM_URL;
     render(platform.user);
     if (!platform.token) return;
     try {
@@ -1206,6 +1518,7 @@ function setupPlatform() {
     signInBtn.disabled = true;
     status.textContent = 'Signing in…';
     try {
+      if (!urlInput.value.trim()) urlInput.value = DEFAULT_PLATFORM_URL;
       const user = await PlatformClient.login(urlInput.value, emailInput.value.trim(), passwordInput.value);
       passwordInput.value = '';
       render(user);
@@ -2826,6 +3139,17 @@ function listenForContentMessages() {
       recorderActions.push(page > 0 ? { ...message.action, page } : message.action);
       const countTxt = document.getElementById('rec-count');
       if (countTxt) countTxt.textContent = `${recorderActions.length} actions`;
+      window.dispatchEvent(new CustomEvent('pas-recording-action', { detail: message.action }));
+    }
+    // A locator picked on the page with the Pick tool: the Recorder shows it, and so does a debugged run.
+    if (message.type === 'LOCATOR_PICKED') {
+      window.dispatchEvent(new CustomEvent('pas-locator-picked', { detail: { locator: String(message.locator || '') } }));
+    }
+    // A recorder tool was chosen in the page's monitor, or was done with. The frames of the
+    // page are told too: each of them handles the pointer itself.
+    if (message.type === 'RECORDER_TOOL') {
+      window.dispatchEvent(new CustomEvent('pas-recorder-tool', { detail: { tool: message.tool || null } }));
+      if (sender.tab?.id != null) chrome.tabs.sendMessage(sender.tab.id, { type: 'SET_TOOL', tool: message.tool || null }, () => void chrome.runtime.lastError);
     }
   });
 }

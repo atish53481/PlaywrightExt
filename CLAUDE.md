@@ -46,7 +46,7 @@ See `PlaywrightOrchestrator/CLAUDE.md` for the full CLI command list (plan/gener
 cd PlaywrightPlatform
 docker compose up -d postgres && npm run db:migrate && npm run db:seed   # once
 npm run dev:server           # API on :3000
-npm run dev:web              # web on :5173
+npm run dev:web              # web on :5180
 npm test                     # server tests (Vitest, real Postgres)
 npm run test:e2e             # web tests (Playwright)
 npm run typecheck

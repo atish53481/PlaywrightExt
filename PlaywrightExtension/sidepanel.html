@@ -16,6 +16,7 @@
       <button class="nav-btn" data-panel="healer">🔧<span class="tooltip">Test Healer</span></button>
       <button class="nav-btn" data-panel="recorder">🎬<span class="tooltip">Recorder</span></button>
       <button class="nav-btn" data-panel="inspector">🔍<span class="tooltip">Inspector</span></button>
+      <button class="nav-btn" data-panel="explorer">🧪<span class="tooltip">Test Explorer (UI Mode)</span></button>
       <div class="nav-divider"></div>
       <button class="nav-btn" data-panel="chat">💬<span class="tooltip">AI Chat</span></button>
       <!-- Hidden on request: the panel and its agent are kept, only the way in is taken out. -->
@@ -148,13 +149,14 @@
           <div class="btn-row">
             <button class="btn btn-primary" id="gen-run">⚡ Generate Code</button>
             <button class="btn btn-secondary" id="gen-run-live">▶ Run on Page</button>
+            <button class="btn btn-secondary" id="gen-debug" title="Run on the page step by step: pause, step over, breakpoints, pick a locator for a failed step">🐞 Debug</button>
             <button class="btn btn-secondary" id="gen-run-bridge">🚀 Run via Playwright</button>
             <button class="btn btn-secondary" id="gen-export">⬇ Download</button>
             <button class="btn btn-secondary btn-sm" id="gen-clear">Clear</button>
           </div>
           <div class="output-section">
             <div class="output-header"><span>Generated Code</span>
-              <div class="output-header-btns"><button class="btn btn-icon" id="gen-copy">📋 Copy</button><button class="btn btn-icon" id="gen-save-project">💾 Save to Project</button></div>
+              <div class="output-header-btns"><button class="btn btn-icon" id="gen-copy">📋 Copy</button><button class="btn btn-icon" id="gen-save-explorer" title="Keep this test in the Test Explorer, in this browser">🧪 To Explorer</button><button class="btn btn-icon" id="gen-save-project">💾 Save to Project</button></div>
             </div>
             <div class="output-content" id="gen-output"><span class="output-placeholder">Playwright code will appear here...</span></div>
           </div>
@@ -200,6 +202,16 @@
               <div class="output-header-btns"><button class="btn btn-icon" id="healer-copy">📋 Copy</button></div>
             </div>
             <div class="output-content" id="healer-output"><span class="output-placeholder">Healing analysis will appear here...</span></div>
+          </div>
+          <div class="output-section" id="healer-script-box" style="display:none">
+            <div class="output-header"><span>Healed Test Script</span>
+              <div class="output-header-btns">
+                <button class="btn btn-icon" id="healer-script-copy">📋 Copy</button>
+                <button class="btn btn-icon" id="healer-script-use" title="Put the healed script in Broken Test Code, to heal it again">↩ Use as input</button>
+              </div>
+            </div>
+            <div id="healer-script-note" class="projects-message" role="status"></div>
+            <textarea id="healer-script" rows="16" spellcheck="false" aria-label="Healed test script"></textarea>
           </div>
           <div id="healer-apply" class="settings-section" style="display:none">
             <div class="projects-message" id="healer-apply-target"></div>
@@ -254,6 +266,19 @@
             <button class="btn btn-secondary btn-sm" id="rec-clear">Clear</button>
           </div>
           <div class="form-group">
+            <span class="field-label">Tools — choose one, then click an element on the page (Esc cancels)</span>
+            <div class="btn-row" id="rec-tools">
+              <button class="btn btn-secondary btn-sm" data-tool="pick" title="Show the locator of an element">🎯 Pick locator</button>
+              <button class="btn btn-secondary btn-sm" data-tool="assertVisible" title="expect(locator).toBeVisible()">👁 Assert visibility</button>
+              <button class="btn btn-secondary btn-sm" data-tool="assertText" title="expect(locator).toContainText(...)">🔤 Assert text</button>
+              <button class="btn btn-secondary btn-sm" data-tool="assertValue" title="expect(locator).toHaveValue(...), or toBeChecked() for a checkbox">✏ Assert value</button>
+            </div>
+            <div class="picked-locator" id="rec-picked" style="display:none">
+              <code id="rec-picked-code"></code>
+              <button class="btn btn-icon" id="rec-picked-copy">📋 Copy</button>
+            </div>
+          </div>
+          <div class="form-group">
             <span class="field-label">Recorded Actions</span>
             <div class="action-list" id="action-list"><span style="color:var(--text3);font-size:11px;padding:4px">No actions yet</span></div>
           </div>
@@ -264,6 +289,7 @@
           <div class="btn-row">
             <button class="btn btn-secondary" id="rec-ai-enhance">✨ AI Enhance</button>
             <button class="btn btn-secondary" id="rec-run-live">▶ Run on Page</button>
+            <button class="btn btn-secondary" id="rec-debug" title="Run on the page step by step: pause, step over, breakpoints, pick a locator for a failed step">🐞 Debug</button>
             <button class="btn btn-secondary" id="rec-run-bridge">🚀 Run via Playwright</button>
             <button class="btn btn-secondary" id="rec-export">⬇ Download</button>
           </div>
@@ -272,6 +298,7 @@
               <div class="output-header-btns">
                 <button class="btn btn-icon" id="rec-edit">✏️ Edit</button>
                 <button class="btn btn-icon" id="rec-copy">📋 Copy</button>
+                <button class="btn btn-icon" id="rec-save-explorer" title="Keep this test in the Test Explorer, in this browser">🧪 To Explorer</button>
                 <button class="btn btn-icon" id="rec-save-project">💾 Save to Project</button>
               </div>
             </div>
@@ -285,6 +312,73 @@
               </div>
             </div>
             <div class="output-content" id="rec-run-results" style="max-height:220px;overflow-y:auto"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TEST EXPLORER (UI MODE) -->
+      <div class="panel" id="panel-explorer">
+        <div class="panel-header">
+          <span class="panel-icon">🧪</span>
+          <div><h2>Test Explorer</h2><p>Your tests in this browser: run one or all, debug, see every step — and open Playwright's own tools</p></div>
+          <span class="badge">UI Mode</span>
+        </div>
+        <div class="panel-body">
+          <div class="btn-row">
+            <button class="btn btn-primary" id="exp-run-all">▶ Run all</button>
+            <button class="btn btn-secondary" id="exp-run-failed">↻ Run failed</button>
+            <select id="exp-engine" aria-label="How Run all runs the tests" style="max-width:150px">
+              <option value="live">On page</option>
+              <option value="bridge">Real Playwright</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" id="exp-new">＋ New</button>
+            <button class="btn btn-secondary btn-sm" id="exp-import">⬆ Import</button>
+            <input type="file" id="exp-file" accept=".ts,.js,.mjs,.cjs" multiple style="display:none">
+          </div>
+          <input type="text" id="exp-filter" placeholder="Filter tests..." aria-label="Filter tests">
+          <div style="font-size:11px;color:var(--text2)"><span id="exp-summary"></span> <span id="exp-progress" style="color:var(--accent)"></span></div>
+          <div class="exp-list" id="exp-list"></div>
+
+          <div class="exp-detail" id="exp-detail" style="display:none">
+            <div class="form-group">
+              <label for="exp-name">Test name</label>
+              <input type="text" id="exp-name">
+            </div>
+            <div class="form-group">
+              <label for="exp-code">Code</label>
+              <textarea id="exp-code" rows="9" spellcheck="false" style="font-family:var(--mono);font-size:11px;white-space:pre"></textarea>
+            </div>
+            <div id="exp-last" style="font-size:11px;color:var(--text2)"></div>
+            <div class="btn-row">
+              <button class="btn btn-primary" id="exp-run">▶ Run on Page</button>
+              <button class="btn btn-secondary" id="exp-debug">🐞 Debug</button>
+              <button class="btn btn-secondary" id="exp-run-bridge">🚀 Run via Playwright</button>
+              <button class="btn btn-secondary" id="exp-inspector" title="npx playwright test --debug">🐞 Playwright Inspector</button>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-secondary btn-sm" id="exp-save">💾 Save changes</button>
+              <button class="btn btn-secondary btn-sm" id="exp-download">⬇ Download</button>
+              <button class="btn btn-danger btn-sm" id="exp-delete">🗑 Delete</button>
+            </div>
+            <div class="output-section" id="exp-run-section" style="display:none">
+              <div class="output-header"><span>Run Results</span>
+                <div class="output-header-btns">
+                  <button class="btn btn-icon" id="exp-heal" style="display:none">🩹 Heal Failures</button>
+                  <span id="exp-run-summary" style="font-size:11px;color:var(--text2)"></span>
+                </div>
+              </div>
+              <div class="output-content" id="exp-run-results" style="max-height:260px;overflow-y:auto"></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Playwright's own tools (the Bridge must be running)</h3>
+            <div class="btn-row">
+              <button class="btn btn-secondary" id="exp-ui-mode" title="npx playwright test --ui, with the tests listed above">🖥 Playwright UI Mode</button>
+              <button class="btn btn-secondary" id="exp-codegen" title="npx playwright codegen <url>: close its window to bring the recording here">🎬 Playwright Codegen</button>
+            </div>
+            <input type="text" id="exp-codegen-url" placeholder="Codegen address (empty = the current tab)" aria-label="Codegen address" style="margin-top:6px">
+            <pre class="bridge-log" id="exp-tool-log" style="display:none;margin-top:8px;max-height:140px;overflow-y:auto"></pre>
           </div>
         </div>
       </div>

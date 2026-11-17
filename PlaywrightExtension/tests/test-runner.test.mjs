@@ -219,3 +219,18 @@ test('a recorded value with a quote survives code generation and parsing', () =>
   assert.equal(step.action, 'fill');
   assert.equal(step.value, "O'Brien");
 });
+
+test('each parsed step names its line in the script', () => {
+  const code = [
+    "import { test, expect } from '@playwright/test';",
+    '',
+    "test('cart', async ({ page }) => {",
+    "  await page.goto('https://a.com');",
+    "  await page.locator('[data-test=\"add\"]').click();",
+    '  await expect(page).toHaveURL(/cart/);',
+    '});',
+  ].join('\n');
+  assert.deepEqual(TestRunner.parse(code).map((s) => s.line), [4, 5, 6]);
+  // In markdown, the number is the line of the whole answer, not of the code block.
+  assert.deepEqual(TestRunner.parse("Fixed:\n```ts\nawait page.goto('https://a.com');\n```").map((s) => s.line), [3]);
+});

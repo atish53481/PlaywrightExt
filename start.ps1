@@ -19,6 +19,34 @@ function Listening($port) {
   [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
 }
 
+# Names the process holding a port, for the message when the port is not ours to use.
+function PortOwner($port) {
+  $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+  $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
+  if ($proc) { "$($proc.Name) (PID $($proc.ProcessId)) $($proc.CommandLine)" } else { "PID $($conn.OwningProcess)" }
+}
+
+# A listener on one of our ports is only "already running" when it answers as our
+# service does; anything else is another app sitting on the port.
+function Serves($url, $pattern) {
+  try {
+    (Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 5).Content -match $pattern
+  } catch { $false }
+}
+
+# Starts a service on a port that must be free, or leaves ours alone when it is already up.
+function EnsureService($what, $port, [scriptblock]$isOurs, $seconds, [scriptblock]$start) {
+  if (-not (Listening $port)) {
+    & $start
+    WaitFor $what $seconds { Listening $port }
+    Ok 'started'
+  } elseif (& $isOurs) {
+    Ok 'already running'
+  } else {
+    Fail "Port $port is taken by another app: $(PortOwner $port). Stop it, or move $what to a free port."
+  }
+}
+
 function DockerReady {
   cmd /c 'docker info >nul 2>&1'
   $LASTEXITCODE -eq 0
@@ -46,7 +74,7 @@ if (-not (Test-Path (Join-Path $platform '.env'))) {
   Fail 'PlaywrightPlatform\.env is missing. Copy .env.example to .env and fill it in (see PlaywrightPlatform\README.md).'
 }
 $appPort = [int](EnvValue 'APP_PORT' '3000')
-$webPort = 5173
+$webPort = 5180  # keep equal to server.port in PlaywrightPlatform\web\vite.config.ts
 $bridgePort = 8787
 
 Step 'Docker'
@@ -76,18 +104,14 @@ try {
 }
 
 Step "Platform API (port $appPort)"
-if (Listening $appPort) { Ok 'already running' } else {
-  StartWindow 'Platform API' $platform 'npm run dev:server'
-  WaitFor 'The platform API' 60 { Listening $appPort }
-  Ok 'started'
-}
+EnsureService 'the platform API (APP_PORT in PlaywrightPlatform\.env)' $appPort `
+  { Serves "http://127.0.0.1:$appPort/api/health" '"database"' } 60 `
+  { StartWindow 'Platform API' $platform 'npm run dev:server' }
 
 Step "Web app (port $webPort)"
-if (Listening $webPort) { Ok 'already running' } else {
-  StartWindow 'Platform Web' $platform 'npm run dev:web'
-  WaitFor 'The web app' 60 { Listening $webPort }
-  Ok 'started'
-}
+EnsureService 'the web app (start.ps1 and PlaywrightPlatform\web\vite.config.ts)' $webPort `
+  { Serves "http://localhost:$webPort/" '<title>Playwright AI Platform</title>' } 60 `
+  { StartWindow 'Platform Web' $platform 'npm run dev:web' }
 
 Step "Bridge (port $bridgePort)"
 if (Listening $bridgePort) { Ok 'already running' } else {

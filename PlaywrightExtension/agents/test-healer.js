@@ -21,7 +21,12 @@ Healing protocol:
 6. Prevention advice (better locator strategy, web-first assertions)
 
 Locator repair preference: getByRole > getByLabel > getByPlaceholder > getByTestId > CSS. Replace waitForTimeout with web-first assertions.
-Output structured markdown with code blocks. The patched file must carry a // File: tests/<name>.spec.ts header.`;
+Output structured markdown with code blocks. The patched file must carry a // File: tests/<name>.spec.ts header.
+
+The patched file is the WHOLE test, ready to run: one \`\`\`typescript block with its imports and every
+step of the original, the failing lines fixed and every other line kept as it was. Never "...",
+never "rest unchanged", never only the changed lines in that block. Error lines may name the
+line number ("Line 12: ...") of the failing step in the original script.`;
   }
 
   async run({ brokenCode, errorMessage = '', context = '', failedSteps = null }) {

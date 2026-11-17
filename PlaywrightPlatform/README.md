@@ -53,10 +53,10 @@ npm run db:seed                 # create the first admin
 
 ```bash
 npm run dev:server   # API on http://127.0.0.1:3000
-npm run dev:web      # web app on http://localhost:5173
+npm run dev:web      # web app on http://localhost:5180
 ```
 
-Open http://localhost:5173 and sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.
+Open http://localhost:5180 and sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.
 
 ## Run in production
 
@@ -389,7 +389,7 @@ All routes are under `/api`. Errors always look like
 | `/api/health` returns `database: "down"` | PostgreSQL is not running or `DATABASE_URL` is wrong. Run `docker compose ps`; check port and password. |
 | `docker compose up` fails with "port is already allocated" | Another PostgreSQL uses 5432. Set `POSTGRES_PORT=5433` and use that port in both database URLs. |
 | Tests fail with `database "playwright_db_test" does not exist` | The data volume predates the init script. Run `docker compose exec postgres createdb -U <POSTGRES_USER> playwright_db_test`. |
-| Server fails to start with `EADDRINUSE` | Port 3000 is taken. Set `APP_PORT=3001` in `.env`, and start the web app with `VITE_API_TARGET=http://127.0.0.1:3001 npm run dev:web`. |
+| Server fails to start with `EADDRINUSE` | Port 3000 is taken. Set `APP_PORT=3001` in `.env` and restart both; the web app's `/api` proxy reads `APP_PORT` from the same file. Update the Platform URL in the extension's Settings to match. |
 | Login returns 429 | Ten attempts per 15 minutes per address. Wait, or restart the server in development. |
 | Web app shows "Missing or invalid CSRF token" | The page is older than the session. Reload it. |
 | Sign-in works but the next request is 401 in production | The site is served over plain HTTP, so the `Secure` cookie is dropped. Serve it over HTTPS. |
