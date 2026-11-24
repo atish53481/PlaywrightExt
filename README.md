@@ -20,6 +20,17 @@ Playwright AI Studio puts the AI agents inside the browser instead of next to it
 - **Bridge** — a local WebSocket server that runs the generated code as a real headed `npx playwright test`, and proxies LLM calls to the Claude Code CLI.
 - **Orchestrator** (`pworch`) — a standalone 15-agent CLI for full plan → generate → execute → heal pipelines, usable independently of the extension.
 
+## Works like Playwright
+
+| Playwright command | In the extension |
+|---|---|
+| `npx playwright codegen <url>` | Recorder with Pick locator and Assert visibility / text / value tools |
+| `npx playwright test x.spec.js --debug` | 🐞 Debug: pause, step over, breakpoints, retry, Pick locator at runtime |
+| `npx playwright test --ui` | 🧪 Test Explorer: saved tests, run one / all / failed, step timeline |
+
+Each also has a button that opens the real Playwright tool through the Bridge.
+Step-by-step guide: [docs/WORKFLOW.md](docs/WORKFLOW.md).
+
 ## Tech Stack
 
 | Component | Stack |

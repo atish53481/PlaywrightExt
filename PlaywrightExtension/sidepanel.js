@@ -4,10 +4,10 @@ import { ClaudeProvider } from './providers/claude-provider.js';
 import { OpenAIProvider } from './providers/openai-provider.js';
 import { GeminiProvider } from './providers/gemini-provider.js';
 import { BridgeProvider } from './providers/bridge-provider.js';
-import { BridgeClient } from './utils/bridge-client.js';
 import { Storage } from './utils/storage.js';
 import { PlaywrightCodegen } from './utils/playwright-codegen.js';
-import { TestRunner } from './utils/test-runner.js';
+import { runCodeLive, runCodeViaBridge, esc } from './ui/live-run.js';
+import { setupExplorer, saveTestToExplorer } from './ui/explorer.js';
 
 // ---- State ----
 let orchestrator = new Orchestrator(new MockProvider());
@@ -38,6 +38,10 @@ async function init() {
   setupSession();
   setupOrchestrator();
   setupSettings();
+  await setupExplorer({
+    onHeal: routeToHealer,
+    exportCode: (code, name) => orchestrator.getAgent('export').exportAsCode(code, 'typescript', name || 'playwright-test'),
+  });
   listenForContentMessages();
 }
 
@@ -244,101 +248,61 @@ function setupGenerator() {
   });
 
   // ---- Run generated code live on the active page ----
-  const liveBtn = document.getElementById('gen-run-live');
-  liveBtn?.addEventListener('click', async () => {
+  const genCode = () => {
     const code = document.getElementById('gen-output')?.textContent || '';
-    if (!code || code.includes('will appear here')) { showToast('Generate code first'); return; }
+    if (!code || code.includes('will appear here')) { showToast('Generate code first'); return null; }
+    return code;
+  };
+  const runGenLive = async (btn, debug) => {
+    const code = genCode();
+    if (!code) return;
     await runCodeLive(code, {
       section: document.getElementById('gen-run-section'),
       results: document.getElementById('gen-run-results'),
       summary: document.getElementById('gen-run-summary'),
-      btn: liveBtn,
+      btn, debug,
       healBtn: document.getElementById('gen-heal'),
-      idPrefix: 'gen-run'
+      onHeal: routeToHealer,
+      onCodeChange: (next) => setOutput(output, next),
+    });
+  };
+  const liveBtn = document.getElementById('gen-run-live');
+  liveBtn?.addEventListener('click', () => runGenLive(liveBtn, false));
+
+  // ---- Debug: step through on the page (pause, step over, breakpoints, pick locator) ----
+  const debugBtn = document.getElementById('gen-debug');
+  debugBtn?.addEventListener('click', () => runGenLive(debugBtn, true));
+
+  document.getElementById('gen-save')?.addEventListener('click', async () => {
+    const code = genCode();
+    if (!code) return;
+    const firstLine = (document.getElementById('gen-input')?.value || '').trim().split('\n')[0].slice(0, 50);
+    const t = await saveTestToExplorer({ name: firstLine || 'Generated test', code, source: 'generator' });
+    showToast(`Saved "${t.name}" to Test Explorer`);
+  });
+}
+
+// ---- Shared run helpers (Generator + Recorder + Explorer panels) ----
+// runCodeLive / runCodeViaBridge live in ui/live-run.js.
+
+// healer stage (official test-agents workflow): route failures to the healer agent
+function routeToHealer(code, failedSteps) {
+  const healerCode = document.getElementById('healer-code');
+  const healerError = document.getElementById('healer-error');
+  if (healerCode) healerCode.value = code;
+  if (healerError) healerError.value = failedSteps.map(f => `${f.label} → ${f.error}`).join('\n');
+  document.querySelector('.nav-btn[data-panel="healer"]')?.click();
+  document.getElementById('healer-run')?.click();
+}
+
+function sendToPage(payload) {
+  return new Promise(resolve => {
+    chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload }, resp => {
+      resolve(resp || { error: chrome.runtime.lastError?.message || 'Page did not respond' });
     });
   });
 }
 
-// ---- Shared run helpers (Generator + Recorder panels) ----
-async function runCodeViaBridge(code, { section, results, summary, btn }) {
-  section.style.display = 'block';
-  results.innerHTML = '<pre style="margin:0;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>';
-  const log = results.querySelector('pre');
-  summary.textContent = '🌉 connecting to bridge...';
-  btn.disabled = true;
-
-  try {
-    const res = await BridgeClient.runCode(code, (msg) => {
-      if (msg.type === 'status' || msg.type === 'output') {
-        log.textContent += msg.message || msg.line || '';
-        results.scrollTop = results.scrollHeight;
-        summary.textContent = '🏃 Playwright running (headed)...';
-      }
-    });
-    summary.textContent = res.passed ? '✅ Playwright run PASSED' : `❌ Playwright run FAILED (exit ${res.exitCode})`;
-    showToast(res.passed ? 'Real Playwright run passed!' : 'Run failed — see output');
-  } catch (e) {
-    summary.textContent = '🌉 bridge unavailable';
-    log.textContent = `${e.message}\n\nSetup (once):\n  cd PlaywrightExt/PlaywrightBridge\n  npm run setup\n\nThen keep running:\n  npm start`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function runCodeLive(code, { section, results, summary, btn, healBtn, idPrefix }) {
-  const steps = TestRunner.parse(code);
-  if (steps.length === 0) { showToast('No runnable Playwright steps found in code'); return; }
-
-  section.style.display = 'block';
-  summary.textContent = `0/${steps.length}`;
-
-  const icons = { pending: '⏳', running: '▶️', passed: '✅', failed: '❌', skipped: '⏭️' };
-  results.innerHTML = steps.map((s, i) =>
-    `<div class="run-step" id="${idPrefix}-step-${i}" style="padding:3px 6px;font-size:11px;font-family:monospace;border-bottom:1px solid var(--border,#333)">
-      <span id="${idPrefix}-step-icon-${i}">${icons.pending}</span> ${s.label.replace(/</g, '&lt;')}
-      <div id="${idPrefix}-step-detail-${i}" style="color:#ff6b6b;padding-left:20px"></div>
-    </div>`).join('');
-
-  btn.disabled = true;
-  if (healBtn) healBtn.style.display = 'none';
-  const failedSteps = [];
-  let done = 0;
-  try {
-    const runSummary = await TestRunner.run(steps, (i, status, detail) => {
-      const icon = document.getElementById(`${idPrefix}-step-icon-${i}`);
-      if (icon) icon.textContent = icons[status] || '';
-      if (status !== 'running') {
-        done++;
-        summary.textContent = `${done}/${steps.length}`;
-      }
-      if (status === 'failed' && detail) {
-        failedSteps.push({ label: steps[i].label, error: detail });
-        const d = document.getElementById(`${idPrefix}-step-detail-${i}`);
-        if (d) d.textContent = detail;
-      }
-      document.getElementById(`${idPrefix}-step-${i}`)?.scrollIntoView({ block: 'nearest' });
-    });
-    summary.textContent = `✅ ${runSummary.passed} passed · ❌ ${runSummary.failed} failed · ⏭️ ${runSummary.skipped} skipped`;
-    showToast(runSummary.failed === 0 ? 'All runnable steps passed!' : `${runSummary.failed} step(s) failed`);
-
-    // 🎭 healer stage (official test-agents workflow): route failures to the healer agent
-    if (runSummary.failed > 0 && healBtn) {
-      healBtn.style.display = 'inline-block';
-      healBtn.onclick = () => {
-        const healerCode = document.getElementById('healer-code');
-        const healerError = document.getElementById('healer-error');
-        if (healerCode) healerCode.value = code;
-        if (healerError) healerError.value = failedSteps.map(f => `${f.label} → ${f.error}`).join('\n');
-        document.querySelector('.nav-btn[data-panel="healer"]')?.click();
-        document.getElementById('healer-run')?.click();
-      };
-    }
-  } catch (e) {
-    summary.textContent = `Error: ${e.message}`;
-  } finally {
-    btn.disabled = false;
-  }
-}
 
 // ---- 3. TEST HEALER ----
 function setupHealer() {
@@ -402,7 +366,12 @@ function setupRecorder() {
     if (!list) return;
     list.innerHTML = recorderActions.length === 0
       ? '<span style="color:var(--text3);font-size:11px;padding:4px">No actions yet</span>'
-      : recorderActions.map(a => `<div class="action-item"><span class="action-type">${a.type}</span><span>${a.selector || a.url || a.key || a.value || ''}</span></div>`).join('');
+      // action text comes from the page under test — always escape it
+      : PlaywrightCodegen.normalizeActions(recorderActions).map(a => {
+        const target = a.type === 'navigate' ? a.url : (a.locator || a.selector || a.key || '');
+        const value = ['fill', 'select', 'assertText', 'assertValue'].includes(a.type) ? ` = "${a.value ?? ''}"` : a.type === 'press' ? ` [${a.key}]` : '';
+        return `<div class="action-item"><span class="action-type">${esc(a.type)}</span><span>${esc(target + value)}</span></div>`;
+      }).join('');
     list.scrollTop = list.scrollHeight;
     if (countTxt) countTxt.textContent = `${recorderActions.length} actions`;
     renderRiskWarnings();
@@ -460,8 +429,10 @@ function setupRecorder() {
   stopBtn?.addEventListener('click', () => {
     isRecording = false;
     clearInterval(recorderInterval);
-    chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'STOP_RECORDING' } }, (resp) => {
-      if (resp?.actions) recorderActions = resp.actions;
+    // The side panel is the source of truth for actions: the page's own list is
+    // wiped on every full navigation, the RECORDING_ACTION stream is not.
+    chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'STOP_RECORDING' } }, () => {
+      void chrome.runtime.lastError;
       renderActionList();
       updateRecOutput();
     });
@@ -469,7 +440,30 @@ function setupRecorder() {
     statusTxt.textContent = `Stopped — ${recorderActions.length} actions`;
     startBtn.disabled = false; pauseBtn.disabled = true; stopBtn.disabled = true;
     pauseBtn.textContent = '⏸ Pause';
+    setToolMode('idle');
   });
+
+  // ---- Codegen tools: pick locator + assertions (same tools as the on-page toolbar) ----
+  const toolBtns = [...document.querySelectorAll('#rec-tools [data-mode]')];
+  function setToolMode(mode) {
+    toolBtns.forEach(b => b.classList.toggle('on', b.getAttribute('data-mode') === mode));
+  }
+  toolBtns.forEach(b => b.addEventListener('click', async () => {
+    const mode = b.getAttribute('data-mode');
+    const next = b.classList.contains('on') ? 'idle' : mode;
+    const resp = await sendToPage({ type: 'SET_MODE', mode: next });
+    if (!resp?.ok) { showToast(resp?.error || 'Page did not respond'); return; }
+    setToolMode(next);
+    if (next !== 'idle') showToast('Now click an element on the page');
+  }));
+  window.addEventListener('pas-rec-mode', (e) => setToolMode(e.detail.mode));
+  window.addEventListener('pas-locator-picked', (e) => {
+    document.getElementById('rec-picked').style.display = 'flex';
+    document.getElementById('rec-picked-code').textContent = `page.${e.detail.locator}`;
+  });
+  document.getElementById('rec-picked-copy')?.addEventListener('click', () =>
+    copyText(document.getElementById('rec-picked-code').textContent));
+  window.addEventListener('pas-recording-action', () => { renderActionList(); updateRecOutput(); });
 
   document.getElementById('rec-ai-enhance')?.addEventListener('click', async () => {
     if (recorderActions.length === 0) { showToast('Record some actions first'); return; }
@@ -534,18 +528,31 @@ function setupRecorder() {
     });
   });
 
-  const recLiveBtn = document.getElementById('rec-run-live');
-  recLiveBtn?.addEventListener('click', async () => {
+  const runRecLive = async (btn, debug) => {
+    if (isRecording) { showToast('Stop recording first'); return; }
     const code = getRecordedCode();
     if (!code) return;
     await runCodeLive(code, {
       section: document.getElementById('rec-run-section'),
       results: document.getElementById('rec-run-results'),
       summary: document.getElementById('rec-run-summary'),
-      btn: recLiveBtn,
+      btn, debug,
       healBtn: document.getElementById('rec-heal'),
-      idPrefix: 'rec-run'
+      onHeal: routeToHealer,
+      // a locator swapped in the debugger is a manual edit — keep it
+      onCodeChange: (next) => { userEditedCode = true; output.textContent = next; lastOutput = next; },
     });
+  };
+  const recLiveBtn = document.getElementById('rec-run-live');
+  recLiveBtn?.addEventListener('click', () => runRecLive(recLiveBtn, false));
+  const recDebugBtn = document.getElementById('rec-debug');
+  recDebugBtn?.addEventListener('click', () => runRecLive(recDebugBtn, true));
+
+  document.getElementById('rec-save')?.addEventListener('click', async () => {
+    const code = isEditingCode ? (document.getElementById('rec-edit-area')?.value || '') : (output?.textContent || '');
+    if (!code || code.includes('will generate code here')) { showToast('Record some actions first'); return; }
+    const t = await saveTestToExplorer({ name: document.getElementById('rec-test-name')?.value || 'Recorded Test', code, source: 'recorder' });
+    showToast(`Saved "${t.name}" to Test Explorer`);
   });
 
   document.getElementById('rec-copy')?.addEventListener('click', () =>
@@ -561,6 +568,7 @@ function setupRecorder() {
     isEditingCode = false; userEditedCode = false;
     if (editBtn) editBtn.textContent = '✏️ Edit';
     output.innerHTML = '<span class="output-placeholder">Recording will generate code here...</span>';
+    document.getElementById('rec-picked').style.display = 'none';
     const runSection = document.getElementById('rec-run-section');
     if (runSection) runSection.style.display = 'none';
   });
@@ -603,14 +611,19 @@ function renderInspectorResults(elementInfo) {
 
   const list = document.getElementById('locator-list');
   list.innerHTML = locators.map((l, i) => `
-    <div class="locator-card" style="cursor:pointer" onclick="navigator.clipboard.writeText('page.${l.locator}').then(()=>{})">
+    <div class="locator-card" style="cursor:pointer" data-locator="${esc(`page.${l.locator}`)}">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span class="locator-strategy">${l.strategy}</span>
-        <span style="font-size:10px;color:var(--text2)">${l.score}/100</span>
+        <span class="locator-strategy">${esc(l.strategy)}</span>
+        <span style="font-size:10px;color:var(--text2)">${Number(l.score)}/100</span>
       </div>
-      <div class="locator-code">page.${l.locator}</div>
-      <div class="score-bar"><div class="score-fill" style="width:${l.score}%"></div></div>
+      <div class="locator-code">${esc(`page.${l.locator}`)}</div>
+      <div class="score-bar"><div class="score-fill" style="width:${Number(l.score)}%"></div></div>
     </div>`).join('');
+  // MV3 forbids inline onclick handlers — delegate instead
+  list.onclick = (e) => {
+    const card = e.target.closest('[data-locator]');
+    if (card) copyText(card.getAttribute('data-locator'));
+  };
 
   document.getElementById('element-info').textContent = [
     `Tag: ${tag || '—'}`, id ? `ID: ${id}` : null,
@@ -729,8 +742,18 @@ function setupSession() {
   const statusTxt= document.getElementById('sess-status-text');
   const output   = document.getElementById('sess-output');
 
+  // Actions arrive as a RECORDING_ACTION stream (it survives page navigation)
+  let sessionActions = [];
+  window.addEventListener('pas-recording-action', (e) => {
+    if (!isSessionCapturing) return;
+    sessionActions.push(e.detail);
+    sessionActionCount = sessionActions.length;
+    document.getElementById('sess-actions').textContent = sessionActionCount;
+  });
+
   startBtn?.addEventListener('click', async () => {
     isSessionCapturing = true; sessionStartTime = Date.now();
+    sessionActions = [];
     sessionActionCount = 0; sessionRequestCount = 0;
     dot.className = 'rec-dot recording';
     statusTxt.textContent = 'Capturing session...';
@@ -745,8 +768,8 @@ function setupSession() {
   stopBtn?.addEventListener('click', () => {
     isSessionCapturing = false;
     clearInterval(sessionInterval);
-    chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'STOP_RECORDING' } }, (resp) => {
-      if (resp?.actions) { sessionActionCount = resp.actions.length; }
+    chrome.runtime.sendMessage({ type: 'RELAY_TO_CONTENT', payload: { type: 'STOP_RECORDING' } }, () => {
+      void chrome.runtime.lastError;
       document.getElementById('sess-actions').textContent = sessionActionCount;
     });
     dot.className = 'rec-dot';
@@ -757,7 +780,7 @@ function setupSession() {
   document.getElementById('sess-generate')?.addEventListener('click', async () => {
     showLoading(output, 'Browser Session Agent generating test...');
     try {
-      const result = await orchestrator.dispatch('session', { sessionData: { url: 'active page', duration: sessionActionCount }, actions: [] });
+      const result = await orchestrator.dispatch('session', { sessionData: { url: sessionActions[0]?.url || 'active page', duration: sessionActionCount }, actions: PlaywrightCodegen.normalizeActions(sessionActions) });
       setOutput(output, result);
     } catch(e) { output.textContent = `Error: ${e.message}`; }
   });
@@ -859,8 +882,13 @@ function listenForContentMessages() {
     }
     if (message.type === 'RECORDING_ACTION') {
       recorderActions.push(message.action);
-      const countTxt = document.getElementById('rec-count');
-      if (countTxt) countTxt.textContent = `${recorderActions.length} actions`;
+      window.dispatchEvent(new CustomEvent('pas-recording-action', { detail: message.action }));
+    }
+    if (message.type === 'LOCATOR_PICKED') {
+      window.dispatchEvent(new CustomEvent('pas-locator-picked', { detail: message }));
+    }
+    if (message.type === 'REC_MODE') {
+      window.dispatchEvent(new CustomEvent('pas-rec-mode', { detail: message }));
     }
   });
 }

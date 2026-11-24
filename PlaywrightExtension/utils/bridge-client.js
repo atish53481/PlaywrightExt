@@ -1,8 +1,9 @@
 // WebSocket client for the local Playwright Bridge (PlaywrightExt/PlaywrightBridge).
-// The bridge runs real Playwright tests (headed) and proxies LLM calls to the
-// locally installed Claude Code CLI.
+// The bridge runs real Playwright tests (headed), opens the real Playwright tools
+// (UI Mode, Inspector, Codegen) and proxies LLM calls to the Claude Code CLI.
 
 const BRIDGE_URL = 'ws://127.0.0.1:8787';
+const NOT_RUNNING = 'Bridge not running — start it: cd PlaywrightExt/PlaywrightBridge && npm start';
 
 export const BridgeClient = {
 
@@ -10,14 +11,11 @@ export const BridgeClient = {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(BRIDGE_URL);
       const t = setTimeout(() => {
-        try { ws.close(); } catch {}
-        reject(new Error('Bridge not running — start it: cd PlaywrightExt/PlaywrightBridge && npm start'));
+        try { ws.close(); } catch { /* ignore */ }
+        reject(new Error(NOT_RUNNING));
       }, timeoutMs);
       ws.onopen = () => { clearTimeout(t); resolve(ws); };
-      ws.onerror = () => {
-        clearTimeout(t);
-        reject(new Error('Bridge not running — start it: cd PlaywrightExt/PlaywrightBridge && npm start'));
-      };
+      ws.onerror = () => { clearTimeout(t); reject(new Error(NOT_RUNNING)); };
     });
   },
 
@@ -26,20 +24,34 @@ export const BridgeClient = {
     catch { return false; }
   },
 
-  // Runs generated code with the real Playwright runner. onEvent gets every
-  // bridge message ({type:'status'|'output'|'done'}). Resolves with the done msg.
-  async runCode(code, onEvent) {
+  // Sends one command and streams its events to onEvent until 'done' / 'error'.
+  async _stream(cmd, payload, onEvent) {
     const ws = await this.connect();
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (fn, v) => { if (!settled) { settled = true; fn(v); } };
       ws.onmessage = (e) => {
         let msg; try { msg = JSON.parse(e.data); } catch { return; }
         onEvent?.(msg);
-        if (msg.type === 'done') { ws.close(); resolve(msg); }
-        if (msg.type === 'error') { ws.close(); reject(new Error(msg.error)); }
+        if (msg.type === 'done') { finish(resolve, msg); ws.close(); }
+        if (msg.type === 'error') { finish(reject, new Error(msg.error)); ws.close(); }
       };
-      ws.onclose = () => reject(new Error('Bridge connection closed'));
-      ws.send(JSON.stringify({ id: Date.now(), cmd: 'runCode', payload: { code } }));
+      ws.onclose = () => finish(reject, new Error('Bridge connection closed'));
+      ws.send(JSON.stringify({ id: Date.now(), cmd, payload }));
     });
+  },
+
+  // Runs code with the real Playwright runner. onEvent gets every bridge message
+  // ({type:'status'|'output'|'done'}). Resolves with the done msg ({passed, exitCode}).
+  runCode(code, onEvent) {
+    return this._stream('runCode', { code }, onEvent);
+  },
+
+  // Opens a real Playwright tool. cmd: 'uiMode' {tests:[{name,code}]} |
+  // 'debug' {code} | 'codegen' {url}. Resolves when the tool window is closed;
+  // for codegen the done message carries the recorded test in `code`.
+  launchTool(cmd, payload, onEvent) {
+    return this._stream(cmd, payload, onEvent);
   },
 
   // LLM completion via local Claude Code CLI

@@ -16,6 +16,7 @@
       <button class="nav-btn" data-panel="healer">🔧<span class="tooltip">Test Healer</span></button>
       <button class="nav-btn" data-panel="recorder">🎬<span class="tooltip">Recorder</span></button>
       <button class="nav-btn" data-panel="inspector">🔍<span class="tooltip">Inspector</span></button>
+      <button class="nav-btn" data-panel="explorer">🧪<span class="tooltip">Test Explorer (UI Mode)</span></button>
       <div class="nav-divider"></div>
       <button class="nav-btn" data-panel="chat">💬<span class="tooltip">AI Chat</span></button>
       <button class="nav-btn" data-panel="framework">📦<span class="tooltip">Framework</span></button>
@@ -134,7 +135,9 @@
           <div class="btn-row">
             <button class="btn btn-primary" id="gen-run">⚡ Generate Code</button>
             <button class="btn btn-secondary" id="gen-run-live">▶ Run on Page</button>
+            <button class="btn btn-secondary" id="gen-debug" title="Step through on the page: pause, step over, breakpoints, pick locator">🐞 Debug</button>
             <button class="btn btn-secondary" id="gen-run-bridge">🚀 Run via Playwright</button>
+            <button class="btn btn-secondary" id="gen-save" title="Save to the Test Explorer">💾 Save</button>
             <button class="btn btn-secondary" id="gen-export">⬇ Download</button>
             <button class="btn btn-secondary btn-sm" id="gen-clear">Clear</button>
           </div>
@@ -224,6 +227,19 @@
             <button class="btn btn-secondary btn-sm" id="rec-clear">Clear</button>
           </div>
           <div class="form-group">
+            <span class="field-label">Codegen tools — click one, then click an element on the page (Esc cancels)</span>
+            <div class="btn-row" id="rec-tools">
+              <button class="btn btn-secondary btn-sm" data-mode="pick" title="Show the best locator for an element">🎯 Pick locator</button>
+              <button class="btn btn-secondary btn-sm" data-mode="assertVisible" title="expect(locator).toBeVisible()">👁 Assert visibility</button>
+              <button class="btn btn-secondary btn-sm" data-mode="assertText" title="expect(locator).toContainText(...)">🔤 Assert text</button>
+              <button class="btn btn-secondary btn-sm" data-mode="assertValue" title="expect(locator).toHaveValue(...) / toBeChecked()">✏ Assert value</button>
+            </div>
+            <div class="picked-locator" id="rec-picked" style="display:none">
+              <code id="rec-picked-code"></code>
+              <button class="btn btn-icon" id="rec-picked-copy">📋 Copy</button>
+            </div>
+          </div>
+          <div class="form-group">
             <span class="field-label">Recorded Actions</span>
             <div class="action-list" id="action-list"><span style="color:var(--text3);font-size:11px;padding:4px">No actions yet</span></div>
           </div>
@@ -231,7 +247,9 @@
           <div class="btn-row">
             <button class="btn btn-secondary" id="rec-ai-enhance">✨ AI Enhance</button>
             <button class="btn btn-secondary" id="rec-run-live">▶ Run on Page</button>
+            <button class="btn btn-secondary" id="rec-debug" title="Step through on the page: pause, step over, breakpoints, pick locator">🐞 Debug</button>
             <button class="btn btn-secondary" id="rec-run-bridge">🚀 Run via Playwright</button>
+            <button class="btn btn-secondary" id="rec-save" title="Save to the Test Explorer">💾 Save</button>
             <button class="btn btn-secondary" id="rec-export">⬇ Download</button>
           </div>
           <div class="output-section">
@@ -286,6 +304,73 @@
               <span class="field-label">Element Info</span>
               <div class="output-content" id="element-info" style="min-height:60px;font-size:11px"></div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TEST EXPLORER (UI MODE) -->
+      <div class="panel" id="panel-explorer">
+        <div class="panel-header">
+          <span class="panel-icon">🧪</span>
+          <div><h2>Test Explorer</h2><p>UI Mode — saved tests, run / debug, step timeline, real Playwright tools</p></div>
+          <span class="badge">UI Mode</span>
+        </div>
+        <div class="panel-body">
+          <div class="btn-row">
+            <button class="btn btn-primary" id="exp-run-all">▶ Run all</button>
+            <button class="btn btn-secondary" id="exp-run-failed">↻ Run failed</button>
+            <select id="exp-engine" aria-label="Engine for batch runs" style="max-width:150px">
+              <option value="live">On page (Live)</option>
+              <option value="bridge">Real Playwright</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" id="exp-new">＋ New</button>
+            <button class="btn btn-secondary btn-sm" id="exp-import">⬆ Import</button>
+            <input type="file" id="exp-file" accept=".ts,.js,.mjs,.cjs" multiple style="display:none">
+          </div>
+          <input type="text" id="exp-filter" placeholder="Filter tests..." aria-label="Filter tests">
+          <div style="font-size:11px;color:var(--text2)"><span id="exp-summary"></span> <span id="exp-progress" style="color:var(--accent)"></span></div>
+          <div class="exp-list" id="exp-list"></div>
+
+          <div class="exp-detail" id="exp-detail" style="display:none">
+            <div class="form-group">
+              <label for="exp-name">Test name</label>
+              <input type="text" id="exp-name">
+            </div>
+            <div class="form-group">
+              <label for="exp-code">Code</label>
+              <textarea id="exp-code" rows="9" spellcheck="false" style="font-family:var(--mono);font-size:11px;white-space:pre"></textarea>
+            </div>
+            <div id="exp-last" style="font-size:11px;color:var(--text2)"></div>
+            <div class="btn-row">
+              <button class="btn btn-primary" id="exp-run">▶ Run on Page</button>
+              <button class="btn btn-secondary" id="exp-debug">🐞 Debug</button>
+              <button class="btn btn-secondary" id="exp-run-bridge">🚀 Run via Playwright</button>
+              <button class="btn btn-secondary" id="exp-debug-bridge" title="npx playwright test --debug">🐞 Playwright Inspector</button>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-secondary btn-sm" id="exp-save">💾 Save changes</button>
+              <button class="btn btn-secondary btn-sm" id="exp-export">⬇ Download</button>
+              <button class="btn btn-danger btn-sm" id="exp-delete">🗑 Delete</button>
+            </div>
+            <div class="output-section" id="exp-run-section" style="display:none">
+              <div class="output-header"><span>Run Results</span>
+                <div class="output-header-btns">
+                  <button class="btn btn-icon" id="exp-heal" style="display:none">🩹 Heal Failures</button>
+                  <span id="exp-run-summary" style="font-size:11px;color:var(--text2)"></span>
+                </div>
+              </div>
+              <div class="output-content" id="exp-run-results" style="max-height:260px;overflow-y:auto"></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Real Playwright tools (needs the Bridge running)</h3>
+            <div class="btn-row" style="margin-top:8px">
+              <button class="btn btn-secondary" id="exp-ui-mode" title="npx playwright test --ui">🖥 Playwright UI Mode</button>
+              <button class="btn btn-secondary" id="exp-codegen" title="npx playwright codegen <url>">🎬 Playwright Codegen</button>
+            </div>
+            <input type="text" id="exp-codegen-url" placeholder="Codegen URL (blank = current tab)" aria-label="Codegen URL" style="margin-top:6px">
+            <pre class="bridge-log" id="exp-tool-log" style="display:none;margin-top:8px;max-height:140px;overflow-y:auto"></pre>
           </div>
         </div>
       </div>
@@ -536,7 +621,7 @@
           </div>
           <div id="settings-status" style="font-size:12px;color:var(--text2);padding:4px 0"></div>
           <div class="settings-section">
-            <h3>About Playwright AI Studio v1.0.0</h3>
+            <h3>About Playwright AI Studio v1.1.0</h3>
             <div style="font-size:11px;color:var(--text2);line-height:1.8">
               <div>🎭 The GitHub Copilot for QA Engineers</div>
               <div>10 AI Agents: Planner · Generator · Healer · Recorder · Inspector · Chat · Framework · Export · Session · Orchestrator</div>

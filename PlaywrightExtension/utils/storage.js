@@ -34,6 +34,16 @@ export const Storage = {
     return recordings;
   },
 
+  // Test Explorer — saved tests with their last run result
+  async getTests() {
+    const data = await this.get('pas_tests');
+    return Array.isArray(data.pas_tests) ? data.pas_tests : [];
+  },
+
+  async saveTests(tests) {
+    await this.set({ pas_tests: tests });
+  },
+
   async getSessions() {
     const data = await this.get('pas_sessions');
     return data.pas_sessions || [];
