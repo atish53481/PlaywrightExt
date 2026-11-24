@@ -45,7 +45,12 @@ export function createPlatformClient({ fetchFn, storage }) {
       // A validation error lists its specific problems in `details`; the first one is more
       // useful than the generic message.
       const detail = Array.isArray(data?.error?.details) ? data.error.details[0]?.message : null;
-      const err = new Error(detail || data?.error?.message || `Platform request failed (${res.status})`);
+      // Every platform error carries { error: { message } }. An answer without one comes from
+      // something else on that address, e.g. the platform moved to another port since sign-in.
+      const fallback = typeof data?.error?.message === 'string'
+        ? `Platform request failed (${res.status})`
+        : `${baseUrl} did not answer like the Playwright Platform (${res.status}). Sign out and sign in again with the platform's address (Settings → Platform).`;
+      const err = new Error(detail || data?.error?.message || fallback);
       err.status = res.status;
       // Lets a caller react to one particular refusal, such as RUN_IN_PROGRESS.
       err.code = data?.error?.code ?? null;
