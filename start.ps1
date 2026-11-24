@@ -73,9 +73,14 @@ function EnvValue($name, $default) {
 if (-not (Test-Path (Join-Path $platform '.env'))) {
   Fail 'PlaywrightPlatform\.env is missing. Copy .env.example to .env and fill it in (see PlaywrightPlatform\README.md).'
 }
-$appPort = [int](EnvValue 'APP_PORT' '3000')
-$webPort = 5180  # keep equal to server.port in PlaywrightPlatform\web\vite.config.ts
-$bridgePort = 8787
+# Every port comes from PlaywrightPlatform\.env; change it there, not here.
+$appPort = [int](EnvValue 'APP_PORT' '3000')            # platform API
+$webPort = [int](EnvValue 'WEB_PORT' '5180')            # web app (vite.config.ts reads the same key)
+$postgresPort = [int](EnvValue 'POSTGRES_PORT' '5432')  # PostgreSQL in Docker (docker-compose.yml)
+$pgAdminPort = 5050                                     # optional pgAdmin (docker-compose.yml, profile tools)
+$jenkinsUrl = (EnvValue 'JENKINS_URL' 'http://localhost:8080').TrimEnd('/')
+$jenkinsPort = ([Uri]$jenkinsUrl).Port
+$bridgePort = 8787  # fixed: the extension connects to ws://127.0.0.1:8787 (utils/bridge-client.js)
 
 Step 'Docker'
 if (DockerReady) {
@@ -88,11 +93,11 @@ if (DockerReady) {
   Ok 'started'
 }
 
-Step 'PostgreSQL'
+Step "PostgreSQL in Docker (port $postgresPort)"
 Push-Location $platform
 try {
   docker compose up -d --wait postgres
-  if ($LASTEXITCODE -ne 0) { Fail 'docker compose could not start postgres.' }
+  if ($LASTEXITCODE -ne 0) { Fail "docker compose could not start postgres on port $postgresPort (POSTGRES_PORT in PlaywrightPlatform\.env). If the port is taken: $(PortOwner $postgresPort)" }
   Ok 'healthy'
 
   Step 'Database migrations'
@@ -120,14 +125,19 @@ if (Listening $bridgePort) { Ok 'already running' } else {
   Ok 'started'
 }
 
-Step 'Jenkins'
+Step "Jenkins ($jenkinsUrl)"
 $jenkins = Get-Service Jenkins -ErrorAction SilentlyContinue
-if (-not $jenkins) {
-  Write-Host '   no Jenkins service on this machine (only needed for Run on Jenkins)' -ForegroundColor Yellow
-} elseif ($jenkins.Status -eq 'Running') {
-  Ok 'service running'
-} else {
+$jenkinsLocal = ([Uri]$jenkinsUrl).Host -in @('localhost', '127.0.0.1')
+if ($jenkinsLocal -and (Listening $jenkinsPort)) {
+  Ok "answering on port $jenkinsPort"
+} elseif ($jenkins -and $jenkins.Status -ne 'Running') {
   Write-Host '   service is stopped. Start it from an administrator prompt: Start-Service Jenkins' -ForegroundColor Yellow
+} elseif ($jenkins) {
+  Write-Host "   service running, but nothing listens on port $jenkinsPort. Set JENKINS_URL in PlaywrightPlatform\.env to the port Jenkins uses." -ForegroundColor Yellow
+} elseif ($jenkinsLocal) {
+  Write-Host "   not running on port $jenkinsPort (only needed for Run on Jenkins)" -ForegroundColor Yellow
+} else {
+  Ok 'on another machine; not checked'
 }
 
 Step 'Playwright Docker image (Run on Jenkins runs the tests in it)'
@@ -142,9 +152,12 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 Write-Host "`nAll up." -ForegroundColor Green
-Write-Host "   Web app : http://localhost:$webPort"
-Write-Host "   API     : http://127.0.0.1:$appPort"
-Write-Host "   Bridge  : ws://127.0.0.1:$bridgePort"
+Write-Host "   Web app   : http://localhost:$webPort"
+Write-Host "   API       : http://127.0.0.1:$appPort"
+Write-Host "   Bridge    : ws://127.0.0.1:$bridgePort"
+Write-Host "   PostgreSQL: 127.0.0.1:$postgresPort (Docker)"
+Write-Host "   pgAdmin   : http://127.0.0.1:$pgAdminPort (only after: docker compose --profile tools up -d pgadmin)"
+Write-Host "   Jenkins   : $jenkinsUrl"
 Write-Host '   Stop    : close the three service windows (PostgreSQL keeps running in Docker)'
 
 if (-not $NoBrowser) { Start-Process "http://localhost:$webPort" }
